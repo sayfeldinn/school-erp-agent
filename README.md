@@ -50,7 +50,10 @@ graph TD
     L -->|final answer| U
 ```
 
-- LLM: `qwen3:8b` via local Ollama (native tool-calling mode, `think:false`, `temperature=0`)
+- LLM: provider-configurable - local `qwen3:8b` via Ollama by default
+  (native tool calling, `think:false`, `temperature=0`), or any
+  OpenAI-compatible backend (Groq free `llama-3.3-70b-versatile`, LM Studio)
+  via `.env`
 - Agent server: FastAPI (planned port **8000**) — **Phase 4**
 - Mock API: FastAPI serving frozen seed data (port **8001**) — done, handed to P2
 - Tool results are fed back to the LLM as **data, never instructions** (prompt-injection defense)
@@ -65,9 +68,11 @@ School Erp Ai Agent/
 │   ├── tools.py            # 4 tool definitions (strict JSON schemas) + role allowlist
 │   ├── executor.py         # validation, normalization, HTTP execution
 │   ├── core.py             # AgentLoop: the decision/execute/repeat loop
-│   ├── llm_client.py       # Ollama /api/chat client (native tools)
+│   ├── llm_client.py       # provider clients: Ollama native + OpenAI-compatible (Groq/LM Studio)
+│   ├── config.py           # LLM backend config from .env (python-dotenv)
 │   └── prompts/
 │       └── system.json     # System prompt as DATA (edit without touching code)
+├── .env.example            # copy to .env to pick your LLM backend (see Setup)
 ├── api/
 │   └── mock_api.py         # Contract-faithful mock of the real ERP API
 ├── data/
@@ -82,6 +87,8 @@ School Erp Ai Agent/
 │   ├── test_contract.py        # 10 tests - data + executor contract
 │   ├── test_api_contract.py    # 19 tests - API shape/security contract
 │   ├── test_agent_loop.py      # 9 tests - loop (3 fast unit + 6 live integration)
+│   ├── test_llm_providers.py   # 12 tests - Ollama + OpenAI-compat clients (no network)
+│   ├── conftest.py             # auto-skip integration tests when no LLM is reachable
 │   └── case_template.json      # Eval case format (P4)
 ├── plan.md                  # The plan (gitignored - lives in the team's notes)
 └── pytest.ini               # Marker registration (integration/slow)
@@ -91,7 +98,7 @@ School Erp Ai Agent/
 
 ## Setup
 
-Requirements: Python 3.12+, [Ollama](https://ollama.com) running locally.
+Requirements: Python 3.12+, one LLM backend (see below).
 
 ```powershell
 cd "D:\Workspace\Projects\School Erp Ai Agent"
@@ -101,25 +108,57 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 
-# 2. models (already pulled; pull if missing)
-ollama pull qwen3:8b          # default model
-ollama pull qwen3:4b          # latency fallback
-
-# 3. sanity check - Ollama is up
-ollama list
+# 2. LLM backend (choose ONE - see next section)
+Copy-Item .env.example .env
+# ...edit .env...
 ```
 
-Files to write a `requirements.txt` from (installed versions on this machine):
+### LLM Backends (choose one)
 
+The project works with **three backends**, all configured from the same
+`.env` file. Copy `.env.example` to `.env` and uncomment one block. The
+default is local Ollama - nothing changes for machines that already have it.
+
+| Backend | Who it's for | Set in `.env` |
+|---|---|---|
+| **Ollama (local, default)** | Machines with Ollama + qwen3:8b | `LLM_PROVIDER=ollama` (defaults apply) |
+| **Groq API (free, no install)** | Teammates without Ollama | `LLM_PROVIDER=openai`, `LLM_API_KEY=gsk_...` |
+| **LM Studio / Jan (local)** | Teammates who want a local GUI model | `LLM_PROVIDER=openai`, `LLM_BASE_URL=http://localhost:1234/v1`, `LLM_MODEL=<name>` |
+
+All variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_PROVIDER` | `ollama` | `ollama` or `openai` (OpenAI-compatible: Groq, LM Studio, Jan) |
+| `LLM_BASE_URL` | per provider | e.g. `http://127.0.0.1:11434` / `https://api.groq.com/openai/v1` / `http://localhost:1234/v1` |
+| `LLM_MODEL` | `qwen3:8b` / `llama-3.3-70b-versatile` | any model the backend serves |
+| `LLM_API_KEY` | - | required for Groq; `GROQ_API_KEY` accepted as alias |
+| `LLM_MAX_TOKENS` | 512 / 1024 | generation cap (bump for analysis-heavy questions) |
+
+Groq free tier gets a key (starts `gsk_`) at https://console.groq.com - no
+credit card. Tool-calling works on all Groq models.
+
+**Verify your setup in 60 seconds:**
+
+```powershell
+.\.venv\Scripts\python.exe scripts\chat_cli.py --check
 ```
-fastapi==0.141.1
-uvicorn==0.52.4
-httpx==0.28.1
-pytest==9.1.1
-pydantic==2.13.4
-anyio==4.14.2
-jsonschema
-```
+
+It prints the resolved config (key masked), runs a direct model probe and a
+full tool-call question, and exits with a clear error otherwise.
+
+| Error you see | What it means | Fix |
+|---|---|---|
+| "rejected the API key" (401/403) | wrong/missing `LLM_API_KEY` | check the key in `.env` |
+| "rate-limited" (429) | free-tier quota | wait a few seconds, retry; pace queries |
+| "bad parameters or schema" (400) | wrong `LLM_MODEL` or `LLM_BASE_URL` | check both; verify model name |
+| "was not found" (404) | model/URL doesn't exist | list models on your backend |
+| "AI service is unavailable" | backend not running / no internet | start Ollama or LM Studio |
+
+**Team note (P4):** the Groq free tier (about 6K tokens/min, ~100-500K
+tokens/day) cannot survive overnight evaluation runs. Run evals on the
+shared Ollama machine; use Groq for development and the live demo, ideally
+with a key separate from any eval automation.
 
 ---
 
@@ -128,11 +167,14 @@ jsonschema
 ### All tests (fast suite)
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                        # everything (38 tests, ~90 s)
-.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract only
+.\.venv\Scripts\python.exe -m pytest -q                        # everything (50 tests, ~90 s)
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers only
 ```
 
-Integration tests call the real LLM (Ollama) + a mock API on port 8099, so they are slower. They are marked `integration` and `slow` (see `pytest.ini`).
+Integration tests call a real LLM (the configured provider) + a mock API on
+port 8099, so they are slower. They are marked `integration`/`slow`. **They
+skip automatically when no provider is reachable** - teammates without
+Ollama/Groq still get a green suite.
 
 ### Mock API (port 8001)
 
@@ -160,8 +202,9 @@ Agent > Ahmed is present today.
 ### Calibration harness (records only, for P1/P4)
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\calibrate.py bench   # run twice: cold then warm
+.\.venv\Scripts\python.exe scripts\calibrate.py bench   # run twice: cold then warm (Ollama only)
 .\.venv\Scripts\python.exe scripts\calibrate.py native  # 20 queries (~3 min)
+.\.venv\Scripts\python.exe scripts\calibrate.py native --provider openai --model llama-3.3-70b-versatile  # score a Groq model
 ```
 
 ---
@@ -216,6 +259,7 @@ Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-m
 | 1 | LLM calibration (native vs JSON mode) | ✅ Done - native wins 90% vs 75% |
 | 2 | Temporary mock API + contract tests | ✅ Done - 19/19, live on 8001 |
 | 3 | Agent loop (single + multi tool, guards) | ✅ Done - 6/6 live tests |
+| 3.5 | LLM providers: Ollama + Groq + LM Studio via `.env` | ✅ Done |
 | 4 | Agent server on port 8000 + sessions | ▶ Next (P1) |
 | 5 | P2 Flutter chat UI + P3 attack suite | team |
 | 6 | P4 evaluation run + fixes | team |
@@ -243,6 +287,7 @@ Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-m
 |---|---|
 | Latency (8B model ~5.4 tok/s, multi-tool = ~13 s) | pre-warm Ollama, `keep_alive`, qwen3:4b fallback, "thinking" state in UI |
 | Weak tool calling on 8B | strict schemas + normalization + JSON-mode fallback, eval gate |
+| **Groq free-tier limits** (6K TPM / ~100K TPD) | dev/demo only; evals run on the shared Ollama machine; separate keys per purpose |
 | GPU is shared between P1 and P4 | P1 calibration mornings, P4 evaluation overnight |
 | Loop spins | max-5 iterations + repeated-call abort |
 | Model drift mid-session | identity re-injected every loop; P3 attack tests |

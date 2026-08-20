@@ -1,8 +1,10 @@
-"""Phase 1 calibration: bench + score tool-calling modes on qwen3:8b.
+"""Phase 1 calibration: bench + score tool-calling modes on the LLM.
 
 Modes:
-  native - Ollama /api/chat with the `tools` param (agent/tools.py schemas)
-  json   - no tools; system prompt demands a JSON tool-call/answer contract
+  native - tool-calling against the CONFIGURED provider
+           (default local Ollama qwen3:8b; --provider openai runs on Groq/LM Studio)
+  json   - Ollama-only: no tools; system prompt demands a JSON tool-call contract
+  bench  - Ollama-only: local token-rate/latency measurement
 
 Scoring per query: correct | right_tool_bad_params | wrong_tool | no_tool | invalid
 For rejection queries, 'no_tool' (refusing to act) is CORRECT.
@@ -10,10 +12,12 @@ For rejection queries, 'no_tool' (refusing to act) is CORRECT.
 Usage:
   python scripts/calibrate.py bench
   python scripts/calibrate.py native
+  python scripts/calibrate.py native --provider openai --model llama-3.3-70b-versatile
   python scripts/calibrate.py json
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import time
@@ -23,9 +27,15 @@ from typing import Any
 import httpx
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from agent.config import resolve_config  # noqa: E402
+from agent.llm_client import LLMClient, OllamaClient, OpenAICompatClient  # noqa: E402
+
 OLLAMA = "http://127.0.0.1:11434"
 MODEL = "qwen3:8b"
 NUM_CTX = 8192
+GENERATION_LIMIT = 300
 
 SYSTEM_PROMPT = (
     "You are an AI assistant for a school ERP. You answer questions about students, "
@@ -66,9 +76,6 @@ QUERIES: list[dict[str, Any]] = [
 
 
 def tool_schemas() -> list[dict]:
-    import sys as _sys
-
-    _sys.path.insert(0, str(REPO))
     from agent.tools import TOOLS
 
     return TOOLS
@@ -92,32 +99,6 @@ def call_ollama(messages: list[dict], tools: list[dict] | None, format_p: str | 
         resp.raise_for_status()
         data = resp.json()
     return data, time.perf_counter() - t0
-
-
-def extract_tool_call(msg: dict) -> tuple[str | None, dict | None, str]:
-    """Return (tool_name, arguments, raw) from an assistant message."""
-    raw = msg.get("content", "")
-    calls = msg.get("tool_calls") or []
-    if calls:
-        fn = calls[0].get("function", {})
-        name = fn.get("name")
-        args = fn.get("arguments") or {}
-        if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except Exception:
-                args = {"_raw": args}
-        return name, args, json.dumps({"tool_calls": calls})
-    text = raw.strip()
-    if not text:
-        return None, None, ""
-    try:
-        obj = json.loads(text)
-        if isinstance(obj, dict) and ("name" in obj or "tool" in obj) and "arguments" in obj:
-            return obj.get("name") or obj.get("tool"), obj.get("arguments"), text
-    except Exception:
-        pass
-    return None, None, text   # prose answer -> no_tool
 
 
 def params_match(got: dict | None, expected: dict) -> bool:
@@ -152,7 +133,7 @@ def score_query(query: dict, got_tool: str | None, got_params: dict | None) -> s
     return "correct"
 
 
-def run(mode: str) -> None:
+def run(mode: str, client: LLMClient) -> None:
     tools = tool_schemas() if mode == "native" else None
     fmt = None
     if mode == "json":
@@ -169,17 +150,18 @@ def run(mode: str) -> None:
     for i, query in enumerate(QUERIES):
         messages = [{"role": "system", "content": system}, {"role": "user", "content": query["q"]}]
         try:
-            data, elapsed = call_ollama(messages, tools, fmt)
+            data, elapsed = client.chat(messages, tools, num_predict=GENERATION_LIMIT)
         except Exception as exc:
             results.append((query["q"], "error", "", "", f"exception: {exc}"))
             traces.append({"i": i, "q": query["q"], "error": str(exc)})
             continue
         msg = data.get("message", {})
-        got_tool, got_params, raw = extract_tool_call(msg)
+        got_tool, got_params, _call_id, raw = LLMClient.extract_tool_call(msg)
         label = score_query(query, got_tool, got_params)
         want = query["tool"] or "NONE(should refuse)"
         results.append((query["q"], want, label, f"{got_tool}({got_params})" if got_tool else (raw[:90] or "no output"), f"{data.get('eval_count',0)}tok {data.get('eval_duration',0)/1e9:.1f}s"))
-        traces.append({"i": i, "q": query["q"], "want": want, "label": label, "tool": got_tool, "params": got_params, "raw": raw})
+        traces.append({"i": i, "q": query["q"], "want": want, "label": label, "tool": got_tool, "params": got_params, "raw": raw,
+                       "provider": client.__class__.__name__, "model": client.model})
         print(f"[{i+1:02d}] {label:22s} want={want:28s} got={got_tool or 'prose'} {got_params or ''}")
 
     out_dir = REPO / "scripts" / "calibration_runs"
@@ -194,7 +176,7 @@ def run(mode: str) -> None:
     for r in results:
         counts[r[2]] = counts.get(r[2], 0) + 1
     correct = counts.get("correct", 0)
-    print(f"\n===== {mode} mode: {correct}/{total} correct ({correct/total*100:.0f}%) =====")
+    print(f"\n===== {mode} mode ({client.__class__.__name__}, {client.model}): {correct}/{total} correct ({correct/total*100:.0f}%) =====")
     for k, v in sorted(counts.items()):
         print(f"  {k:26s} {v}")
     print(f"  trace -> {out_dir / (mode + '_' + stamp + '.jsonl')}")
@@ -211,11 +193,44 @@ def bench() -> None:
     print(f"prompt tokens: {data.get('prompt_eval_count')}  total duration: {data.get('total_duration',0)/1e9:.1f}s")
 
 
-if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "native"
-    if mode == "bench":
+def build_client(args: argparse.Namespace) -> LLMClient:
+    """Client for native mode: CLI flags override the resolved .env config."""
+    cfg = resolve_config()
+    if args.provider:
+        cfg["provider"] = args.provider
+    base_url = args.base_url.rstrip("/") if args.base_url else cfg["base_url"]
+    model = args.model or cfg["model"]
+    if cfg["provider"] == "ollama":
+        return OllamaClient(base_url=base_url, model=model, num_predict=GENERATION_LIMIT)
+    return OpenAICompatClient(
+        base_url=base_url,
+        model=model,
+        api_key=cfg["api_key"],
+        max_tokens=GENERATION_LIMIT,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="calibrate.py - LLM tool-calling benchmark")
+    parser.add_argument("mode", nargs="?", default="native", choices=["bench", "native", "json"],
+                        help="bench/json are Ollama-only (local measurement / format:json)")
+    parser.add_argument("--provider", choices=["ollama", "openai"], default=None,
+                        help="override LLM_PROVIDER for native mode")
+    parser.add_argument("--model", default=None, help="override LLM_MODEL")
+    parser.add_argument("--base-url", default=None, help="override LLM_BASE_URL")
+    args = parser.parse_args()
+
+    if args.mode == "bench":
         bench()
-    elif mode in ("native", "json"):
-        run(mode)
-    else:
-        sys.exit(f"usage: calibrate.py [bench|native|json]")
+        return
+
+    client = build_client(args)
+    if args.mode == "json" and not isinstance(client, OllamaClient):
+        sys.exit("json mode is Ollama-only (uses format=json) - run with provider=ollama")
+
+    if args.mode in ("native", "json"):
+        run(args.mode, client)
+
+
+if __name__ == "__main__":
+    main()
