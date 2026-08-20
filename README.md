@@ -74,12 +74,14 @@ School Erp Ai Agent/
 │       └── system.json     # System prompt as DATA (edit without touching code)
 ├── .env.example            # copy to .env to pick your LLM backend (see Setup)
 ├── api/
-│   └── mock_api.py         # Contract-faithful mock of the real ERP API
+│   ├── mock_api.py         # Contract-faithful mock of the real ERP API (port 8001)
+│   └── agent_server.py     # Agent server + sessions (port 8000) - POST /chat
 ├── data/
 │   ├── seed.json           # Frozen dataset (26 students, 2 schools, 15 days)
 │   └── generate_seed.py    # Regenerates seed.json (deterministic)
 ├── docs/
-│   └── api-contract.md     # FROZEN contract: endpoints, shapes, 403s
+│   ├── api-contract.md           # FROZEN contract: endpoints, shapes, 403s
+│   └── agent-server-contract.md  # FROZEN /chat contract: sessions + errors
 ├── scripts/
 │   ├── calibrate.py        # Phase 1 benchmark harness (native/json/bench)
 │   └── chat_cli.py         # Interactive demo agent with per-step trace
@@ -88,6 +90,7 @@ School Erp Ai Agent/
 │   ├── test_api_contract.py    # 19 tests - API shape/security contract
 │   ├── test_agent_loop.py      # 9 tests - loop (3 fast unit + 6 live integration)
 │   ├── test_llm_providers.py   # 12 tests - Ollama + OpenAI-compat clients (no network)
+│   ├── test_server_contract.py  # 16 tests - /chat shapes, sessions, errors (FakeLLM)
 │   ├── conftest.py             # auto-skip integration tests when no LLM is reachable
 │   └── case_template.json      # Eval case format (P4)
 ├── plan.md                  # The plan (gitignored - lives in the team's notes)
@@ -167,8 +170,8 @@ with a key separate from any eval automation.
 ### All tests (fast suite)
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                        # everything (50 tests, ~90 s)
-.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers only
+.\.venv\Scripts\python.exe -m pytest -q                        # everything (66 tests, ~2 min)
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers + server
 ```
 
 Integration tests call a real LLM (the configured provider) + a mock API on
@@ -180,6 +183,22 @@ Ollama/Groq still get a green suite.
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn api.mock_api:app --port 8001 --host 127.0.0.1
+```
+
+### Agent server (port 8000)
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn api.agent_server:app --port 8000 --host 127.0.0.1
+```
+
+Serves `POST /chat` + sessions per the frozen `docs/agent-server-contract.md`.
+Requires the mock API (above) - or set `MOCK_API_URL` to another backend.
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/chat `
+  -H "Content-Type: application/json" `
+  -H "X-Agent-School: school-a" -H "X-Agent-Role: teacher" `
+  -d '{"message":"Is Ahmed absent today?"}'
 ```
 
 ### Interactive agent demo
@@ -260,8 +279,8 @@ Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-m
 | 2 | Temporary mock API + contract tests | ✅ Done - 19/19, live on 8001 |
 | 3 | Agent loop (single + multi tool, guards) | ✅ Done - 6/6 live tests |
 | 3.5 | LLM providers: Ollama + Groq + LM Studio via `.env` | ✅ Done |
-| 4 | Agent server on port 8000 + sessions | ▶ Next (P1) |
-| 5 | P2 Flutter chat UI + P3 attack suite | team |
+| 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - contract frozen, 16/16 tests |
+| 5 | P2 Flutter chat UI + P3 attack suite | ▶ In progress (team) |
 | 6 | P4 evaluation run + fixes | team |
 | 7 | Final integration + demo | team |
 
