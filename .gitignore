@@ -6,4 +6,5 @@ app/build/
 app/.dart_tool/
 .env
 plan.md
+scripts/calibration_runs/
 *.log
