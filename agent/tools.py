@@ -111,11 +111,11 @@ TOOLS: list[dict[str, Any]] = [
             "name": "get_attendance",
             "description": (
                 "Use for ANY question about attendance: present/absent/late "
-                "status or counts for a single student ('Is Ahmed absent "
-                "today?', 'Ahmed's attendance'). Requires studentId. Optional "
-                "ISO date (YYYY-MM-DD); omit for the latest day. For whole-"
-                "grade attendance or percentages, use return values only - do "
-                "NOT call this tool once per student."
+                "status or counts. For ONE student pass studentId (look the "
+                "student up first with get_student to learn their id). For a "
+                "WHOLE grade pass grade (e.g. grade=5) to get every student's "
+                "status in one call. Optional ISO date (YYYY-MM-DD); omit it "
+                "for today - do not invent dates."
             ),
             "parameters": {
                 "type": "object",
@@ -125,12 +125,17 @@ TOOLS: list[dict[str, Any]] = [
                         "minimum": 1,
                         "description": "The student's numeric id (from get_student/get_students).",
                     },
+                    "grade": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 12,
+                        "description": "Fetch attendance for an entire grade at once.",
+                    },
                     "date": {
                         "type": "string",
-                        "description": "Optional ISO date YYYY-MM-DD (e.g. '2026-08-19'). Words like 'today' are resolved by the system - pass the ISO date.",
+                        "description": "Optional ISO date YYYY-MM-DD. Omit for today.",
                     },
                 },
-                "required": ["studentId"],
                 "additionalProperties": False,
             },
         },

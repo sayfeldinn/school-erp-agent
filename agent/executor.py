@@ -27,7 +27,7 @@ _ENDPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "get_student": ("/students/{id}", ("id",)),
     "get_student_by_name": ("/students", ("name",)),
     "get_teachers": ("/teachers", ("grade", "classroom")),
-    "get_attendance": ("/attendance", ("studentId", "date")),
+    "get_attendance": ("/attendance", ("studentId", "grade", "date")),
 }
 
 MAX_TOOL_RESULT_CHARS = 2000
