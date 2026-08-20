@@ -8,3 +8,4 @@ app/.dart_tool/
 plan.md
 scripts/calibration_runs/
 *.log
+flutter/
