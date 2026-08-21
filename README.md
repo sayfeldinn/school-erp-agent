@@ -74,12 +74,14 @@ School Erp Ai Agent/
 │       └── system.json     # System prompt as DATA (edit without touching code)
 ├── .env.example            # copy to .env to pick your LLM backend (see Setup)
 ├── api/
-│   └── mock_api.py         # Contract-faithful mock of the real ERP API
+│   ├── mock_api.py         # Contract-faithful mock of the real ERP API (port 8001)
+│   └── agent_server.py     # Agent server + sessions (port 8000) - POST /chat
 ├── data/
 │   ├── seed.json           # Frozen dataset (26 students, 2 schools, 15 days)
 │   └── generate_seed.py    # Regenerates seed.json (deterministic)
 ├── docs/
-│   └── api-contract.md     # FROZEN contract: endpoints, shapes, 403s
+│   ├── api-contract.md           # FROZEN contract: endpoints, shapes, 403s
+│   └── agent-server-contract.md  # FROZEN /chat contract: sessions + errors
 ├── scripts/
 │   ├── calibrate.py        # Phase 1 benchmark harness (native/json/bench)
 │   └── chat_cli.py         # Interactive demo agent with per-step trace
@@ -88,8 +90,12 @@ School Erp Ai Agent/
 │   ├── test_api_contract.py    # 19 tests - API shape/security contract
 │   ├── test_agent_loop.py      # 9 tests - loop (3 fast unit + 6 live integration)
 │   ├── test_llm_providers.py   # 12 tests - Ollama + OpenAI-compat clients (no network)
+│   ├── test_server_contract.py  # 16 tests - /chat shapes, sessions, errors (FakeLLM)
 │   ├── conftest.py             # auto-skip integration tests when no LLM is reachable
 │   └── case_template.json      # Eval case format (P4)
+├── chat_ui/                 # Flutter chat UI (P2)
+│   ├── lib/main.dart        # Chat screen, talks to agent server on :8000
+│   └── test/widget_test.dart
 ├── plan.md                  # The plan (gitignored - lives in the team's notes)
 └── pytest.ini               # Marker registration (integration/slow)
 ```
@@ -167,8 +173,8 @@ with a key separate from any eval automation.
 ### All tests (fast suite)
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                        # everything (50 tests, ~90 s)
-.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers only
+.\.venv\Scripts\python.exe -m pytest -q                        # everything (66 tests, ~2 min)
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers + server
 ```
 
 Integration tests call a real LLM (the configured provider) + a mock API on
@@ -181,6 +187,35 @@ Ollama/Groq still get a green suite.
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn api.mock_api:app --port 8001 --host 127.0.0.1
 ```
+
+### Agent server (port 8000)
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn api.agent_server:app --port 8000 --host 127.0.0.1
+```
+
+Serves `POST /chat` + sessions per the frozen `docs/agent-server-contract.md`.
+Requires the mock API (above) - or set `MOCK_API_URL` to another backend.
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/chat `
+  -H "Content-Type: application/json" `
+  -H "X-Agent-School: school-a" -H "X-Agent-Role: teacher" `
+  -d '{"message":"Is Ahmed absent today?"}'
+```
+
+### Flutter chat UI (web on Edge)
+
+Requires the two servers above (ports 8000 + 8001) running first.
+
+```powershell
+cd chat_ui
+C:\Users\MG\flutter\bin\flutter.bat run -d edge
+```
+
+Edge opens automatically with the chat UI. Type a question and press Enter.
+
+> Windows desktop builds require Visual Studio with C++ workload. Use `-d edge` for web if you don't have it.
 
 ### Interactive agent demo
 
@@ -245,7 +280,7 @@ Rules that apply to all tools: strict JSON Schema (`additionalProperties: false`
 
 Commit messages follow `Phase N: what was done, in one line`.
 
-Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`.
+Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p2-mock-api`, `p3/security-core`.
 
 **File ownership.** Everyone works in their own areas (see Team Roles) and sends a heads-up in the team channel when a *cross-cutting* file changes: `docs/api-contract.md`, `data/seed.json`, `agent/tools.py`, `pytest.ini`, `tests/case_template.json`.
 
@@ -260,8 +295,8 @@ Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-m
 | 2 | Temporary mock API + contract tests | ✅ Done - 19/19, live on 8001 |
 | 3 | Agent loop (single + multi tool, guards) | ✅ Done - 6/6 live tests |
 | 3.5 | LLM providers: Ollama + Groq + LM Studio via `.env` | ✅ Done |
-| 4 | Agent server on port 8000 + sessions | ▶ Next (P1) |
-| 5 | P2 Flutter chat UI + P3 attack suite | team |
+| 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - merged to main, `v0.1.0` tag |
+| 5 | P2 Flutter chat UI + P3 attack suite | ▶ In progress (team) |
 | 6 | P4 evaluation run + fixes | team |
 | 7 | Final integration + demo | team |
 
