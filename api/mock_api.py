@@ -24,6 +24,9 @@ STUDENTS = {s["id"]: s for s in SEED["students"]}
 TEACHERS = SEED["teachers"]
 ATTENDANCE = SEED["attendance"]  # str id -> [{date, status}]
 LAST_SCHOOL_DAY = SEED["metadata"]["lastSchoolDay"]
+TRUSTED_SCHOOL_BY_USER = {
+    "teacher.ahmed@school-a.edu": "school-a",
+}
 
 app = FastAPI(title="School ERP Mock API")
 
@@ -42,11 +45,14 @@ async def validation_handler(_, exc: RequestValidationError):
     )
 
 
-def _school_scope(school_header: str | None) -> str:
-    """Return schoolId only when the caller provided an identity header (403 otherwise)."""
-    if not school_header:
+def _school_scope(user_header: str | None, school_header: str | None) -> str:
+    """Verify the claimed school against the caller's trusted server-side scope."""
+    if not user_header or not school_header:
         raise HTTPException(status_code=403, detail={"error": "forbidden", "reason": "missing_identity"})
-    return school_header
+    trusted_school = TRUSTED_SCHOOL_BY_USER.get(user_header)
+    if trusted_school is None or school_header != trusted_school:
+        raise HTTPException(status_code=403, detail={"error": "forbidden", "reason": "school_scope"})
+    return trusted_school
 
 
 def _in_scope(school: str, row_school: str) -> bool:
@@ -77,9 +83,10 @@ def students(
     grade: int | None = Query(None, ge=1, le=12),
     classroom: str | None = None,
     name: str | None = None,
+    x_agent_user: str | None = Header(default=None),
     x_agent_school: str | None = Header(default=None),
 ) -> dict:
-    school = _school_scope(x_agent_school)
+    school = _school_scope(x_agent_user, x_agent_school)
     out = [
         s
         for s in STUDENTS.values()
@@ -92,8 +99,12 @@ def students(
 
 
 @app.get("/students/{sid}")
-def student(sid: int, x_agent_school: str | None = Header(default=None)) -> dict:
-    school = _school_scope(x_agent_school)
+def student(
+    sid: int,
+    x_agent_user: str | None = Header(default=None),
+    x_agent_school: str | None = Header(default=None),
+) -> dict:
+    school = _school_scope(x_agent_user, x_agent_school)
     s = STUDENTS.get(sid)
     if s is None:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -106,9 +117,10 @@ def student(sid: int, x_agent_school: str | None = Header(default=None)) -> dict
 def teachers(
     grade: int | None = Query(None, ge=1, le=12),
     classroom: str | None = None,
+    x_agent_user: str | None = Header(default=None),
     x_agent_school: str | None = Header(default=None),
 ) -> dict:
-    school = _school_scope(x_agent_school)
+    school = _school_scope(x_agent_user, x_agent_school)
     out = [
         t
         for t in TEACHERS
@@ -124,9 +136,10 @@ def attendance(
     studentId: int | None = Query(None, alias="studentId", ge=1),
     date: str | None = None,
     grade: int | None = Query(None, ge=1, le=12),
+    x_agent_user: str | None = Header(default=None),
     x_agent_school: str | None = Header(default=None),
 ) -> dict:
-    school = _school_scope(x_agent_school)
+    school = _school_scope(x_agent_user, x_agent_school)
     target = date or LAST_SCHOOL_DAY
 
     if grade is not None:  # daily status for a whole grade (ONE call)
@@ -163,9 +176,10 @@ def attendance(
 def attendance_summary(
     grade: int = Query(..., ge=1, le=12),
     month: str | None = Query(None, pattern=r"^\d{4}-\d{2}$"),
+    x_agent_user: str | None = Header(default=None),
     x_agent_school: str | None = Header(default=None),
 ) -> dict:
-    school = _school_scope(x_agent_school)
+    school = _school_scope(x_agent_user, x_agent_school)
     month = month or LAST_SCHOOL_DAY[:7]
     out, rates = [], []
     for s in _grade_students(grade):
