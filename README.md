@@ -93,6 +93,9 @@ School Erp Ai Agent/
 │   ├── test_server_contract.py  # 16 tests - /chat shapes, sessions, errors (FakeLLM)
 │   ├── conftest.py             # auto-skip integration tests when no LLM is reachable
 │   └── case_template.json      # Eval case format (P4)
+├── chat_ui/                 # Flutter chat UI (P2)
+│   ├── lib/main.dart        # Chat screen, talks to agent server on :8000
+│   └── test/widget_test.dart
 ├── plan.md                  # The plan (gitignored - lives in the team's notes)
 └── pytest.ini               # Marker registration (integration/slow)
 ```
@@ -201,6 +204,19 @@ curl.exe -X POST http://127.0.0.1:8000/chat `
   -d '{"message":"Is Ahmed absent today?"}'
 ```
 
+### Flutter chat UI (web on Edge)
+
+Requires the two servers above (ports 8000 + 8001) running first.
+
+```powershell
+cd chat_ui
+C:\Users\MG\flutter\bin\flutter.bat run -d edge
+```
+
+Edge opens automatically with the chat UI. Type a question and press Enter.
+
+> Windows desktop builds require Visual Studio with C++ workload. Use `-d edge` for web if you don't have it.
+
 ### Interactive agent demo
 
 ```powershell
@@ -264,7 +280,7 @@ Rules that apply to all tools: strict JSON Schema (`additionalProperties: false`
 
 Commit messages follow `Phase N: what was done, in one line`.
 
-Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`.
+Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p2-mock-api`, `p3/security-core`.
 
 **File ownership.** Everyone works in their own areas (see Team Roles) and sends a heads-up in the team channel when a *cross-cutting* file changes: `docs/api-contract.md`, `data/seed.json`, `agent/tools.py`, `pytest.ini`, `tests/case_template.json`.
 
@@ -279,7 +295,7 @@ Currently on GitHub: `main`, `p1/develop`, `p1/phase1-calibration`, `p1/phase2-m
 | 2 | Temporary mock API + contract tests | ✅ Done - 19/19, live on 8001 |
 | 3 | Agent loop (single + multi tool, guards) | ✅ Done - 6/6 live tests |
 | 3.5 | LLM providers: Ollama + Groq + LM Studio via `.env` | ✅ Done |
-| 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - contract frozen, 16/16 tests |
+| 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - merged to main, `v0.1.0` tag |
 | 5 | P2 Flutter chat UI + P3 attack suite | ▶ In progress (team) |
 | 6 | P4 evaluation run + fixes | team |
 | 7 | Final integration + demo | team |
