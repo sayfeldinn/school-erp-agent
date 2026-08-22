@@ -54,7 +54,7 @@ graph TD
   (native tool calling, `think:false`, `temperature=0`), or any
   OpenAI-compatible backend (Groq free `llama-3.3-70b-versatile`, LM Studio)
   via `.env`
-- Agent server: FastAPI (planned port **8000**) — **Phase 4**
+- Agent server: FastAPI (port **8000**) — **Phase 4**
 - Mock API: FastAPI serving frozen seed data (port **8001**) — done, handed to P2
 - Tool results are fed back to the LLM as **data, never instructions** (prompt-injection defense)
 
@@ -84,13 +84,16 @@ School Erp Ai Agent/
 │   └── agent-server-contract.md  # FROZEN /chat contract: sessions + errors
 ├── scripts/
 │   ├── calibrate.py        # Phase 1 benchmark harness (native/json/bench)
-│   └── chat_cli.py         # Interactive demo agent with per-step trace
+│   ├── chat_cli.py         # Interactive demo agent with per-step trace
+│   └── smoke_eval.py       # Phase 6 local smoke eval (8 cases x 2 surfaces)
 ├── tests/
 │   ├── test_contract.py        # 10 tests - data + executor contract
 │   ├── test_api_contract.py    # 19 tests - API shape/security contract
 │   ├── test_agent_loop.py      # 9 tests - loop (3 fast unit + 6 live integration)
 │   ├── test_llm_providers.py   # 12 tests - Ollama + OpenAI-compat clients (no network)
 │   ├── test_server_contract.py  # 16 tests - /chat shapes, sessions, errors (FakeLLM)
+│   ├── test_security_authorization.py  # 8 tests - fail-closed roles (P3)
+│   ├── test_security_tenant_isolation.py  # 9 tests - header spoofing / tenant isolation (P3)
 │   ├── conftest.py             # auto-skip integration tests when no LLM is reachable
 │   └── case_template.json      # Eval case format (P4)
 ├── chat_ui/                 # Flutter chat UI (P2)
@@ -173,8 +176,8 @@ with a key separate from any eval automation.
 ### All tests (fast suite)
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                        # everything (66 tests, ~2 min)
-.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers + server
+.\.venv\Scripts\python.exe -m pytest -q                        # everything (83 tests, ~2 min)
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers + server + security
 ```
 
 Integration tests call a real LLM (the configured provider) + a mock API on
@@ -234,6 +237,14 @@ Agent > Ahmed is present today.
   [answered, 3 iter, 13s]
 ```
 
+### Local smoke eval (Phase 6, no P4 dataset needed)
+
+```powershell
+.\.venv\Scripts\python.exe scripts\smoke_eval.py        # 8 cases x 2 surfaces (AgentLoop + POST /chat), real Ollama + in-process mock
+```
+
+Runs on two surfaces (AgentLoop direct + `POST /chat` server) against the real `qwen3:8b` + in-process mock on `8097`. When `p4/eval` lands, swap `CASES` for `test_dataset.json`.
+
 ### Calibration harness (records only, for P1/P4)
 
 ```powershell
@@ -280,7 +291,7 @@ Rules that apply to all tools: strict JSON Schema (`additionalProperties: false`
 
 Commit messages follow `Phase N: what was done, in one line`.
 
-Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p2-mock-api`, `p3/security-core`.
+Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p1/phase5-security`, `p2-mock-api`, `p3/security-core`.
 
 **File ownership.** Everyone works in their own areas (see Team Roles) and sends a heads-up in the team channel when a *cross-cutting* file changes: `docs/api-contract.md`, `data/seed.json`, `agent/tools.py`, `pytest.ini`, `tests/case_template.json`.
 
@@ -296,8 +307,8 @@ Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixe
 | 3 | Agent loop (single + multi tool, guards) | ✅ Done - 6/6 live tests |
 | 3.5 | LLM providers: Ollama + Groq + LM Studio via `.env` | ✅ Done |
 | 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - merged to main, `v0.1.0` tag |
-| 5 | P2 Flutter chat UI + P3 attack suite | ▶ In progress (team) |
-| 6 | P4 evaluation run + fixes | team |
+| 5 | P2 Flutter chat UI + P3 security hardening | ✅ Done - `p1/phase5-security` → `p1/develop` (83/83, +17 security) |
+| 6 | Local smoke eval (P4 dataset not yet available) | ✅ Done - `scripts/smoke_eval.py` 8 cases x 2 surfaces, 16/16 PASS |
 | 7 | Final integration + demo | team |
 
 **Key calibration findings** (P4, use these): model can hallucinate dates (describe "omit date for today") · native tool mode > JSON mode · rejection prompts were refused in 4/4 cases · "students absent today" triggers the wrong-tool instinct (needs `get_students` first).
