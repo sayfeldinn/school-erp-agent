@@ -15,7 +15,7 @@ from agent.llm_client import LLMError
 
 APP = TestClient(app)
 
-HEADERS = {"X-Agent-School": "school-a", "X-Agent-Role": "teacher", "X-Agent-User": "t@a"}
+HEADERS = {"X-Agent-School": "school-a", "X-Agent-Role": "teacher", "X-Agent-User": "teacher.ahmed@school-a.edu"}
 
 
 class FakeLLM:
