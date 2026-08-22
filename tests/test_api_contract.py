@@ -11,7 +11,11 @@ from api.mock_api import app, LAST_SCHOOL_DAY, SEED
 
 client = TestClient(app)
 
-H = {"X-Agent-School": "school-a"}  # identity the agent executor always sends
+H = {
+    "X-Agent-User": "teacher.ahmed@school-a.edu",
+    "X-Agent-Role": "teacher",
+    "X-Agent-School": "school-a",
+}
 
 
 def test_health():
@@ -114,18 +118,14 @@ def test_attendance_summary_default_month_is_last_school_day():
 
 
 def test_forbidden_other_school():
-    r = client.get("/students", headers={"X-Agent-School": "school-a", "X-Agent-Role": "teacher", "X-Agent-User": "t"})
-    other = client.get("/students", headers={"X-Agent-School": "school-b", "X-Agent-Role": "teacher", "X-Agent-User": "t"})
-    assert "school-b" == other.json()["students"][0]["schoolId"]
-    # teacher from school-a must NOT see school-b rows, nor the reverse
-    names_a = {s["name"] for s in r.json()["students"]}
-    names_b = {s["name"] for s in other.json()["students"]}
-    assert not (names_a & names_b)
+    r = client.get("/students", headers={**H, "X-Agent-School": "school-b"})
+    assert r.status_code == 403
+    assert r.json() == {"error": "forbidden", "reason": "school_scope"}
 
 
 def test_forbidden_cross_school_student_lookup():
     # school-a teacher asks for a school-b student id (Omar White = id 24)
-    r = client.get("/students/24", headers={"X-Agent-School": "school-a"})
+    r = client.get("/students/24", headers=H)
     assert r.status_code == 403
     assert r.json() == {"error": "forbidden", "reason": "school_scope"}
 
