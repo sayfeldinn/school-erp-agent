@@ -80,8 +80,11 @@ School Erp Ai Agent/
 │   ├── seed.json           # Frozen dataset (26 students, 2 schools, 15 days)
 │   └── generate_seed.py    # Regenerates seed.json (deterministic)
 ├── docs/
+│   ├── architecture.md           # Full data flow + sequence + module map (plan §5/§9)
 │   ├── api-contract.md           # FROZEN contract: endpoints, shapes, 403s
-│   └── agent-server-contract.md  # FROZEN /chat contract: sessions + errors
+│   ├── agent-server-contract.md  # FROZEN /chat contract: sessions + errors
+│   ├── security-model.md         # Role×tool, tenant isolation, UNTRUSTED data (plan §11)
+│   └── evaluation.md             # Template + rubric + Phase 6 smoke results (plan §13)
 ├── scripts/
 │   ├── calibrate.py        # Phase 1 benchmark harness (native/json/bench)
 │   ├── chat_cli.py         # Interactive demo agent with per-step trace
@@ -291,7 +294,7 @@ Rules that apply to all tools: strict JSON Schema (`additionalProperties: false`
 
 Commit messages follow `Phase N: what was done, in one line`.
 
-Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p1/phase5-security`, `p2-mock-api`, `p3/security-core`.
+Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p1/phase5-security`, `p1/phase6-eval`, `p2-mock-api`, `p3/security-core`.
 
 **File ownership.** Everyone works in their own areas (see Team Roles) and sends a heads-up in the team channel when a *cross-cutting* file changes: `docs/api-contract.md`, `data/seed.json`, `agent/tools.py`, `pytest.ini`, `tests/case_template.json`.
 
@@ -309,7 +312,7 @@ Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixe
 | 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - merged to main, `v0.1.0` tag |
 | 5 | P2 Flutter chat UI + P3 security hardening | ✅ Done - `p1/phase5-security` → `p1/develop` (83/83, +17 security) |
 | 6 | Local smoke eval (P4 dataset not yet available) | ✅ Done - `scripts/smoke_eval.py` 8 cases x 2 surfaces, 16/16 PASS |
-| 7 | Final integration + demo | team |
+| 7 | Final integration + demo (PR to `main`, tag, docs) | ▶ In progress — `p1/phase7-final` (this branch) |
 
 **Key calibration findings** (P4, use these): model can hallucinate dates (describe "omit date for today") · native tool mode > JSON mode · rejection prompts were refused in 4/4 cases · "students absent today" triggers the wrong-tool instinct (needs `get_students` first).
 
