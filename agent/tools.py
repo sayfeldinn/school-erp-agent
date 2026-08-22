@@ -153,12 +153,11 @@ ALLOWED_TOOLS_BY_ROLE: dict[str, list[str]] = {
     "admin": ["get_students", "get_student", "get_teachers", "get_attendance"],
 }
 
-DEFAULT_ROLE = "teacher"
-
-
 def allowed_tools_for(role: str | None) -> list[str]:
     """Return the tool names a role may call. Unknown roles get NOTHING."""
-    return ALLOWED_TOOLS_BY_ROLE.get(role or DEFAULT_ROLE, [])
+    if not role:
+        return []
+    return ALLOWED_TOOLS_BY_ROLE.get(role, [])
 
 
 def tool_names() -> list[str]:
