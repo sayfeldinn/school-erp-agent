@@ -24,6 +24,7 @@ PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 DEFAULT_MAX_ITERATIONS = 5
 
 _GENERIC_FALLBACK = "I couldn't complete that request. Please try rephrasing it."
+_STUDENT_CAPABILITY_DENIAL = "You can only access your own profile and attendance."
 
 
 @dataclass
@@ -50,7 +51,19 @@ class AgentLoop:
         self.llm = llm or OllamaClient()
         self.role = role
         self.max_iterations = max_iterations
-        self.system_prompt = system_prompt if system_prompt is not None else load_system_prompt()
+        self.system_prompt = (
+            system_prompt
+            if system_prompt is not None
+            else load_system_prompt(
+                PROMPTS_DIR / "student.json"
+                if role == "student"
+                else (
+                    PROMPTS_DIR / "teacher.json"
+                    if role == "teacher"
+                    else None
+                )
+            )
+        )
 
     # -- the loop ------------------------------------------------------------
     def run(self, user_message: str, history: list[dict[str, Any]] | None = None) -> LoopResult:
@@ -116,6 +129,15 @@ class AgentLoop:
                 trace["detail"] = result.message
             steps.append(trace)
             tool_calls.append({"tool": tool_name, "arguments": args or {}})
+
+            if self.role == "student" and result.status == "not_allowed":
+                return LoopResult(
+                    answer=_STUDENT_CAPABILITY_DENIAL,
+                    status="answered",
+                    iterations=i + 1,
+                    steps=steps,
+                    tool_calls=tool_calls,
+                )
 
             messages.append(_tool_message(result.as_prompt_block(), tool_call_id, synthetic_id=f"call_{i}"))
 

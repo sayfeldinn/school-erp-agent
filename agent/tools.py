@@ -117,10 +117,14 @@ TOOLS: list[dict[str, Any]] = [
                 "status in one call. Optional ISO date (YYYY-MM-DD); omit it "
                 "for today - do not invent dates."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "studentId": {
+        "parameters": {
+            "type": "object",
+            "oneOf": [
+                {"required": ["studentId"]},
+                {"required": ["grade"]},
+            ],
+            "properties": {
+                "studentId": {
                         "type": "integer",
                         "minimum": 1,
                         "description": "The student's numeric id (from get_student/get_students).",
@@ -140,6 +144,36 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_my_profile",
+            "description": (
+                "Returns the authenticated student's own profile. Takes no "
+                "arguments and cannot select another student."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_my_attendance",
+            "description": (
+                "Returns the authenticated student's own latest attendance. "
+                "Takes no arguments and cannot select another student."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 TOOL_REGISTRY: dict[str, dict[str, Any]] = {t["function"]["name"]: t for t in TOOLS}
@@ -149,8 +183,9 @@ TOOL_REGISTRY: dict[str, dict[str, Any]] = {t["function"]["name"]: t for t in TO
 # ---------------------------------------------------------------------------
 
 ALLOWED_TOOLS_BY_ROLE: dict[str, list[str]] = {
-    "teacher": ["get_students", "get_student", "get_teachers", "get_attendance"],
-    "admin": ["get_students", "get_student", "get_teachers", "get_attendance"],
+    "student": ["get_my_profile", "get_my_attendance"],
+    "teacher": ["get_students", "get_student", "get_attendance"],
+    "admin": ["get_students", "get_student", "get_attendance", "get_teachers"],
 }
 
 def allowed_tools_for(role: str | None) -> list[str]:

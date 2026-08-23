@@ -64,7 +64,14 @@ def test_oneof_stripped_for_openai_compat():
         params = tool["function"]["parameters"]
         assert "oneOf" not in params and "anyOf" not in params and "$ref" not in params
     names = [t["function"]["name"] for t in stripped]
-    assert names == ["get_students", "get_student", "get_teachers", "get_attendance"]
+    assert names == [
+        "get_students",
+        "get_student",
+        "get_teachers",
+        "get_attendance",
+        "get_my_profile",
+        "get_my_attendance",
+    ]
     assert stripped[1]["function"]["parameters"]["properties"]["id"]["type"] == "integer"
 
 
@@ -219,3 +226,57 @@ def test_env_file_crlf_and_precedence(tmp_path, monkeypatch):
     assert cfg["provider"] == "openai"
     assert cfg["model"] == "llama-3.3-70b-versatile"  # no trailing \r
     assert cfg["api_key"] == "gsk_test"
+
+
+def test_describe_never_exposes_api_key_material(monkeypatch):
+    import agent.config as config
+
+    secret = "gsk_SUPER_SECRET_12345"
+
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
+    monkeypatch.setenv("LLM_MODEL", "openai/gpt-oss-120b")
+    monkeypatch.setenv("LLM_API_KEY", secret)
+
+    banner = config.describe()
+
+    assert "key=PRESENT" in banner
+    assert secret not in banner
+    assert secret[:7] not in banner
+
+
+def test_describe_ollama_does_not_report_unrelated_api_key(monkeypatch):
+    import agent.config as config
+
+    secret = "gsk_SUPER_SECRET_12345"
+
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:11434")
+    monkeypatch.setenv("LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv("LLM_API_KEY", secret)
+
+    banner = config.describe()
+
+    assert "key=" not in banner
+    assert secret not in banner
+    assert secret[:7] not in banner
+
+
+def test_describe_openai_without_key_does_not_report_presence(monkeypatch):
+    import agent.config as config
+
+    monkeypatch.setattr(
+        config,
+        "resolve_config",
+        lambda: {
+            "provider": "openai",
+            "model": "test-model",
+            "base_url": "https://example.invalid/v1",
+            "api_key": "",
+        },
+    )
+
+    banner = config.describe()
+
+    assert "key=PRESENT" not in banner
+    assert "key=" not in banner

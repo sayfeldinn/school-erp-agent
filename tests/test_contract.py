@@ -85,7 +85,14 @@ def test_below_80_students_exist(seed):
 def test_tool_schemas_are_frozen_and_strict():
     from agent.tools import TOOL_REGISTRY, tool_names
 
-    assert tool_names() == ["get_students", "get_student", "get_teachers", "get_attendance"]
+    assert tool_names() == [
+        "get_students",
+        "get_student",
+        "get_teachers",
+        "get_attendance",
+        "get_my_profile",
+        "get_my_attendance",
+    ]
     for name in tool_names():
         params = TOOL_REGISTRY[name]["function"]["parameters"]
         assert params.get("additionalProperties") is False, f"{name} must be strict"

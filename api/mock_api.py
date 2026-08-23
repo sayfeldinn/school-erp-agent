@@ -17,6 +17,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from security.auth_registration import generated_roster_identities
+
 DATA = Path(__file__).resolve().parent.parent / "data" / "seed.json"
 SEED: dict[str, Any] = json.loads(DATA.read_text(encoding="utf-8"))
 
@@ -24,8 +26,28 @@ STUDENTS = {s["id"]: s for s in SEED["students"]}
 TEACHERS = SEED["teachers"]
 ATTENDANCE = SEED["attendance"]  # str id -> [{date, status}]
 LAST_SCHOOL_DAY = SEED["metadata"]["lastSchoolDay"]
+_GENERATED_ROSTER_IDENTITIES = generated_roster_identities()
 TRUSTED_SCHOOL_BY_USER = {
+    **{
+        identity["email"]: identity["tenant_id"]
+        for identity in _GENERATED_ROSTER_IDENTITIES
+        if identity["role"] == "teacher"
+    },
     "teacher.ahmed@school-a.edu": "school-a",
+}
+TRUSTED_STUDENT_BY_USER = {
+    **{
+        identity["email"]: {
+            "student_id": identity["erp_person_id"],
+            "school": identity["tenant_id"],
+        }
+        for identity in _GENERATED_ROSTER_IDENTITIES
+        if identity["role"] == "student"
+    },
+    "student.sara@school-a.edu": {
+        "student_id": 2,
+        "school": "school-a",
+    },
 }
 
 app = FastAPI(title="School ERP Mock API")
@@ -53,6 +75,28 @@ def _school_scope(user_header: str | None, school_header: str | None) -> str:
     if trusted_school is None or school_header != trusted_school:
         raise HTTPException(status_code=403, detail={"error": "forbidden", "reason": "school_scope"})
     return trusted_school
+
+
+def _student_self_scope(
+    user_header: str | None,
+    school_header: str | None,
+    role_header: str | None,
+) -> dict[str, Any]:
+    forbidden = HTTPException(
+        status_code=403,
+        detail={"error": "forbidden", "reason": "school_scope"},
+    )
+    if not user_header or not school_header or role_header != "student":
+        raise forbidden
+
+    trusted_identity = TRUSTED_STUDENT_BY_USER.get(user_header)
+    if trusted_identity is None or trusted_identity["school"] != school_header:
+        raise forbidden
+
+    student = STUDENTS.get(trusted_identity["student_id"])
+    if student is None or student["schoolId"] != trusted_identity["school"]:
+        raise forbidden
+    return student
 
 
 def _in_scope(school: str, row_school: str) -> bool:
@@ -98,6 +142,15 @@ def students(
     return {"students": out}
 
 
+@app.get("/students/me")
+def own_student(
+    x_agent_user: str | None = Header(default=None),
+    x_agent_school: str | None = Header(default=None),
+    x_agent_role: str | None = Header(default=None),
+) -> dict:
+    return _student_self_scope(x_agent_user, x_agent_school, x_agent_role)
+
+
 @app.get("/students/{sid}")
 def student(
     sid: int,
@@ -129,6 +182,24 @@ def teachers(
         and (classroom is None or t["classroom"] == classroom)
     ]
     return {"teachers": out}
+
+
+@app.get("/attendance/me")
+def own_attendance(
+    x_agent_user: str | None = Header(default=None),
+    x_agent_school: str | None = Header(default=None),
+    x_agent_role: str | None = Header(default=None),
+) -> dict:
+    student = _student_self_scope(x_agent_user, x_agent_school, x_agent_role)
+    row = _latest_status(student["id"])
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    return {
+        "studentId": student["id"],
+        "name": student["name"],
+        "date": row["date"],
+        "status": row["status"],
+    }
 
 
 @app.get("/attendance")

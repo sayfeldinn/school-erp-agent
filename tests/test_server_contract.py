@@ -10,12 +10,26 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+import api.agent_server as agent_server
 from api.agent_server import app, store
 from agent.llm_client import LLMError
+from security.auth_passwords import hash_password
+from security.auth_sessions import SessionService
+from security.auth_store import SecurityStore
 
 APP = TestClient(app)
 
-HEADERS = {"X-Agent-School": "school-a", "X-Agent-Role": "teacher", "X-Agent-User": "teacher.ahmed@school-a.edu"}
+HEADERS = {}
+LEGACY_IDENTITY_HEADERS = {
+    "X-Agent-School": "school-a",
+    "X-Agent-Role": "teacher",
+    "X-Agent-User": "teacher.ahmed@school-a.edu",
+}
+AUTHENTICATED_IDENTITY = {
+    "school": "school-a",
+    "role": "teacher",
+    "user": "teacher.ahmed@school-a.edu",
+}
 
 
 class FakeLLM:
@@ -37,9 +51,39 @@ def install_llm(script):
     return fake
 
 
+def _create_authenticated_user(db_path, email):
+    auth_store = SecurityStore(db_path)
+    try:
+        auth_store.initialize()
+        if auth_store.get_tenant("school-a") is None:
+            auth_store.create_tenant(tenant_id="school-a", name="Al Noor School")
+        auth_store.create_user(
+            email=email,
+            password_hash=hash_password("temporary-server-contract-password"),
+            role="teacher",
+            tenant_id="school-a",
+        )
+        user = auth_store.get_user_by_email(email)
+    finally:
+        auth_store.close()
+
+    sessions = SessionService(db_path)
+    try:
+        sessions.initialize()
+        return sessions.create_session(user["id"])
+    finally:
+        sessions.close()
+
+
 @pytest.fixture(autouse=True)
-def reset():
+def reset(tmp_path, monkeypatch):
     store._store.clear()
+    db_path = tmp_path / "security.db"
+    token = _create_authenticated_user(
+        db_path, "teacher.ahmed@school-a.edu"
+    )
+    monkeypatch.setattr(agent_server, "AUTH_DB_PATH", db_path)
+    monkeypatch.setitem(HEADERS, "Authorization", f"Bearer {token}")
     yield
     app.state.agent_llm = None
     store._store.clear()
@@ -136,18 +180,85 @@ def test_chat_tool_chain_steps_recorded(mock_up):
 # error / guard paths
 # ---------------------------------------------------------------------------
 
-def test_missing_school_header_403():
-    r = APP.post("/chat", json={"message": "hello"})
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "missing_identity"
+def test_register_non_object_body_uses_registration_validation_detail():
+    r = APP.post("/auth/register", json=[])
+
+    assert r.status_code == 400
+    assert r.json() == {
+        "error": {
+            "code": "invalid_params",
+            "detail": "registration_failed",
+        }
+    }
+    assert "message" not in r.text
 
 
-def test_identity_mismatch_same_session_403():
-    sid = APP.post("/chat", json={"message": "hi"}, headers=HEADERS).json()["session_id"]
-    r = APP.post("/chat", json={"message": "hi again", "session_id": sid},
-                 headers={**HEADERS, "X-Agent-School": "school-b"})
+def test_missing_school_header_does_not_override_authenticated_identity():
+    fake = install_llm([{"role": "assistant", "content": "authenticated"}])
+    headers = {**HEADERS, **LEGACY_IDENTITY_HEADERS}
+    headers.pop("X-Agent-School")
+    r = APP.post("/chat", json={"message": "hello"}, headers=headers)
+    assert r.status_code == 200
+    assert len(fake.calls) == 1
+    assert store._store[r.json()["session_id"]]["identity"] == AUTHENTICATED_IDENTITY
+
+
+@pytest.mark.parametrize(
+    ("header", "value"),
+    [
+        ("X-Agent-School", ""),
+        ("X-Agent-School", "   "),
+        ("X-Agent-Role", None),
+        ("X-Agent-Role", ""),
+        ("X-Agent-Role", "   "),
+        ("X-Agent-User", None),
+        ("X-Agent-User", ""),
+        ("X-Agent-User", "   "),
+    ],
+    ids=[
+        "school-empty",
+        "school-whitespace",
+        "role-missing",
+        "role-empty",
+        "role-whitespace",
+        "user-missing",
+        "user-empty",
+        "user-whitespace",
+    ],
+)
+def test_legacy_identity_header_does_not_override_authenticated_identity(header, value):
+    fake = install_llm([{"role": "assistant", "content": "authenticated"}])
+    headers = {**HEADERS, **LEGACY_IDENTITY_HEADERS}
+    if value is None:
+        headers.pop(header)
+    else:
+        headers[header] = value
+
+    r = APP.post("/chat", json={"message": "hello"}, headers=headers)
+
+    assert r.status_code == 200
+    assert len(fake.calls) == 1
+    assert store._store[r.json()["session_id"]]["identity"] == AUTHENTICATED_IDENTITY
+
+
+def test_identity_mismatch_same_session_403(tmp_path):
+    install_llm([{"role": "assistant", "content": "first"}])
+    mona_token = _create_authenticated_user(
+        tmp_path / "security.db", "teacher.mona@school-a.edu"
+    )
+    sid = APP.post(
+        "/chat",
+        json={"message": "hi"},
+        headers={"Authorization": HEADERS["Authorization"]},
+    ).json()["session_id"]
+    r = APP.post(
+        "/chat",
+        json={"message": "hi again", "session_id": sid},
+        headers={"Authorization": f"Bearer {mona_token}"},
+    )
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "identity_mismatch"
+    assert store._store[sid]["identity"] == AUTHENTICATED_IDENTITY
 
 
 def test_empty_message_400():
