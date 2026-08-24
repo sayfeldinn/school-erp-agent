@@ -14,6 +14,7 @@ def test_teacher_retains_intended_tool_access():
         "get_students",
         "get_student",
         "get_attendance",
+        "get_teachers",
     ]
 
 
