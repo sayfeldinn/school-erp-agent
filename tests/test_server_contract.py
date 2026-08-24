@@ -228,13 +228,8 @@ def test_live_chat_with_real_provider(monkeypatch):
     import httpx
     import uvicorn
 
-    # Pin the provider so a bad key left by other tests can't leak into this one
-    monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
+    from agent.config import load_env
+    load_env()
 
     from api.mock_api import app as mock_app
 

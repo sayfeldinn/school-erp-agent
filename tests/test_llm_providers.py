@@ -210,9 +210,13 @@ def test_env_file_crlf_and_precedence(tmp_path, monkeypatch):
     env.write_bytes(b"LLM_PROVIDER=openai\r\nLLM_MODEL=llama-3.3-70b-versatile\r\nLLM_API_KEY=gsk_test\r\n")
     import agent.config as config
 
-    # snapshot the WHOLE env so load_dotenv (which writes into os.environ)
-    # can never leak into later tests
     monkeypatch.setattr(os, "environ", dict(os.environ))
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
 
     config.load_env(env)
     cfg = config.resolve_config()

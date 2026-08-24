@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agent.config import create_llm
 from agent.executor import ToolCall, ToolExecutor
 from agent.llm_client import LLMClient, LLMError, OllamaClient
 from agent.tools import TOOL_REGISTRY, allowed_tools_for
@@ -47,7 +48,7 @@ class AgentLoop:
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
     ):
         self.executor = ToolExecutor(mock_base_url, role, user, school)
-        self.llm = llm or OllamaClient()
+        self.llm = llm or create_llm()
         self.role = role
         self.max_iterations = max_iterations
         self.system_prompt = system_prompt if system_prompt is not None else load_system_prompt()
@@ -184,6 +185,7 @@ def _history_message(msg: dict[str, Any], tool_id_suffix: str) -> dict[str, Any]
     first = calls[0].get("function", {})
     call = {
         "id": calls[0].get("id") or tool_id_suffix,
+        "type": "function",
         "function": {
             "name": first.get("name"),
             "arguments": first.get("arguments"),
