@@ -184,7 +184,7 @@ TOOL_REGISTRY: dict[str, dict[str, Any]] = {t["function"]["name"]: t for t in TO
 
 ALLOWED_TOOLS_BY_ROLE: dict[str, list[str]] = {
     "student": ["get_my_profile", "get_my_attendance"],
-    "teacher": ["get_students", "get_student", "get_attendance"],
+    "teacher": ["get_students", "get_student", "get_attendance", "get_teachers"],
     "admin": ["get_students", "get_student", "get_attendance", "get_teachers"],
 }
 
