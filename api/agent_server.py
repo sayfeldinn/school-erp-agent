@@ -33,6 +33,7 @@ DEFAULT_ROLE = "teacher"
 DEFAULT_USER = "teacher.ahmed@school-a.edu"
 MAX_HISTORY_TURNS = 8  # matches AgentLoop's history[-8:] window
 MAX_SESSIONS = 100
+load_env()
 
 app = FastAPI(title="School ERP agent server", version="0.2.0")
 

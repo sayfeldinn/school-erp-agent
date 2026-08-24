@@ -97,6 +97,8 @@ def main() -> None:
     parser.add_argument("--check", action="store_true", help="verify the LLM provider and exit")
     parser.add_argument("--mock-port", type=int, default=DEFAULT_MOCK_PORT, help="mock API port")
     args = parser.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
 
     load_env()
     if args.check:

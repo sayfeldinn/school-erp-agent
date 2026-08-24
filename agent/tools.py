@@ -111,11 +111,11 @@ TOOLS: list[dict[str, Any]] = [
             "name": "get_attendance",
             "description": (
                 "Use for ANY question about attendance: present/absent/late "
-                "status or counts. For ONE student pass studentId (look the "
+                "status, history, or counts. For ONE student pass studentId (look the "
                 "student up first with get_student to learn their id). For a "
                 "WHOLE grade pass grade (e.g. grade=5) to get every student's "
-                "status in one call. Optional ISO date (YYYY-MM-DD); omit it "
-                "for today - do not invent dates."
+                "status and attendance history in one call. Optional ISO date (YYYY-MM-DD); omit it "
+                "to get all dates/history - do not invent dates."
             ),
             "parameters": {
                 "type": "object",
