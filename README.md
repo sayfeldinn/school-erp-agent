@@ -75,7 +75,7 @@ graph TD
 ```
 School Erp Ai Agent/
 ├── agent/
-│   ├── tools.py            # 6 strict tool schemas + student/teacher/admin allowlist
+│   ├── tools.py            # 6 strict tool schemas + student/teacher/admin allowlist (teacher has get_teachers per Decision A)
 │   ├── executor.py         # validation, normalization, HTTP execution
 │   ├── core.py             # AgentLoop: the decision/execute/repeat loop
 │   ├── llm_client.py       # provider clients: Ollama native + OpenAI-compatible (Groq/LM Studio)
@@ -102,7 +102,8 @@ School Erp Ai Agent/
 ├── scripts/
 │   ├── calibrate.py        # Phase 1 benchmark harness (native/json/bench)
 │   ├── chat_cli.py         # Interactive demo agent with per-step trace
-│   └── smoke_eval.py       # Historical Phase 6 harness; see docs/evaluation.md
+│   ├── smoke_eval.py       # Historical Phase 6 harness; see docs/evaluation.md
+│   └── run_dataset_eval.py # P4 eval runner for tests/test_dataset.json (10 cases)
 ├── tests/
 │   ├── test_contract.py        # data + strict tool registry contract
 │   ├── test_api_contract.py    # Mock ERP shape and scope contract
@@ -110,12 +111,14 @@ School Erp Ai Agent/
 │   ├── test_llm_providers.py   # Ollama + OpenAI-compatible providers
 │   ├── test_server_contract.py # authenticated /chat, history, and error shapes
 │   ├── test_security_*.py      # authentication, roles, schemas, tenant/self scope,
-│   │                          # injection, loop guards, registration, and sessions
+│   │                          # injection, loop guards, registration, and sessions (17 files, ~192 tests)
+│   ├── test_dataset.json       # P4 10-case dataset (easy/medium/multi_tool/rejection/unknown_tool)
 │   ├── conftest.py             # auto-skip integration tests when no LLM is reachable
 │   └── case_template.json      # Eval case format (P4)
-├── chat_ui/                 # Flutter chat UI (P2)
+├── chat_ui/                 # Flutter chat UI (P2) — login/registration + Bearer chat
 │   ├── lib/main.dart        # Chat screen, talks to agent server on :8000
 │   └── test/widget_test.dart
+├── runtime/                 # SQLite DB (gitignored, created via admin CLI)
 ├── plan.md                  # The plan (gitignored - lives in the team's notes)
 └── pytest.ini               # Marker registration (integration/slow)
 ```
@@ -194,14 +197,17 @@ with a key separate from any eval automation.
 ### All tests (fast suite)
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                        # current full suite
-.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers + server + security
+pip install -r requirements.txt  # required for argon2-cffi on p1/develop after P3 auth merge
+
+.\.venv\Scripts\python.exe -m pytest -q                        # full suite (~192 tests with P3+P4; 83 without argon2)
+.\.venv\Scripts\python.exe -m pytest -m "not integration" -q   # fast: unit + contract + providers + server + security (no LLM)
+.\.venv\Scripts\python.exe scripts/run_dataset_eval.py          # P4 10-case eval via POST /chat (needs Ollama qwen3:8b)
 ```
 
 Integration tests call a real LLM (the configured provider) + a mock API on
 port 8099, so they are slower. They are marked `integration`/`slow`. **They
 skip automatically when no provider is reachable** - teammates without
-Ollama/Groq still get a green suite.
+Ollama/Groq still get a green suite. Security tests require `argon2-cffi` installed.
 
 ### Mock API (port 8001)
 
@@ -343,7 +349,7 @@ Six tools exist in the registry, but no role receives all six:
 | Role | Allowed tools |
 |---|---|
 | Student | `get_my_profile`, `get_my_attendance` |
-| Teacher | `get_students`, `get_student`, `get_attendance` |
+| Teacher | `get_students`, `get_student`, `get_attendance`, `get_teachers` |
 | Admin | `get_students`, `get_student`, `get_attendance`, `get_teachers` |
 
 | Tool | Parameters |
@@ -353,7 +359,7 @@ Six tools exist in the registry, but no role receives all six:
 | `get_students` | optional integer `grade` 1–12, `classroom`, `name` |
 | `get_student` | exactly one of integer `id` or string `name` |
 | `get_attendance` | exactly one of integer `studentId` or integer `grade`; optional `date` |
-| `get_teachers` | optional integer `grade` and `classroom`; admin-only |
+| `get_teachers` | optional integer `grade` and `classroom`; teacher + admin |
 
 The allowlist authorizes those admin tools, but the loopback Mock ERP has a
 separate static trusted-user map. A demo admin whose email is not already in
@@ -385,7 +391,7 @@ registry, executor, and ERP boundary remain authoritative.
 
 Commit messages follow `Phase N: what was done, in one line`.
 
-Currently on GitHub: `main`, `p1/develop`, `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p1/phase5-security`, `p1/phase6-eval`, `p2-mock-api`, `p3/security-core`.
+Currently on GitHub: `main`, `p1/develop` (at `c6d6206` with P4 dataset + P3 auth + Decision A fix), `p1/fix-p3-auth` (Decision A branch), `p1/llm-providers`, `p1/mock-api-fixes`, `p1/phase1-calibration`, `p1/phase2-mock-api-stub`, `p1/phase3-agent-loop`, `p1/phase4-server`, `p1/phase5-security`, `p1/phase6-eval`, `p1/phase7-final`, `p2-mock-api`, `p3/security-auth-student`, `p3/security-core`, `p4/testing-and-evaluation`.
 
 **File ownership.** Everyone works in their own areas (see Team Roles) and sends a heads-up in the team channel when a *cross-cutting* file changes: `docs/api-contract.md`, `data/seed.json`, `agent/tools.py`, `pytest.ini`, `tests/case_template.json`.
 
@@ -406,7 +412,7 @@ are historical evidence, not the current authentication/security contract.
 | 4 | Agent server on port 8000 + sessions (`POST /chat`) | ✅ Done - merged to main, `v0.1.0` tag |
 | 5 | P2 Flutter chat UI + P3 security hardening | ✅ Historical pre-P3-auth result (`83/83`) |
 | 6 | Local smoke eval (P4 dataset not yet available) | ✅ Historical pre-Bearer/role result (`16/16`); not a current gate |
-| 7 | Final integration + demo (PR to `main`, tag, docs) | ▶ In progress — `p1/phase7-final` (this branch) |
+| 7 | Final integration + demo (PR to `main`, tag, docs) | ✅ Done - `p1/phase7-final` docs (`b3d50f3`); P4 dataset + P3 auth (with Decision A) merged to `p1/develop` (`c6d6206`) — current full suite ~192 tests (requires `pip install -r requirements.txt` for `argon2-cffi`) |
 
 **Historical calibration context:** native tool mode outperformed JSON mode, and
 the model sometimes hallucinated dates. Current security decisions come from
@@ -442,7 +448,8 @@ deterministic code and current tests, not these prompt-level measurements.
 | Mock ERP boundary | bind to loopback; internal `X-Agent-*` context is not production service authentication |
 | Static enrollment codes | roster-bound demo registration only; not production enrollment proof |
 
-## Questions?
+---
 
-Open an issue or ask in the team channel. Current implementation and current
-tests are the source of truth for the contracts documented here.
+## License
+
+This project is licensed under the [MIT License](LICENSE).
