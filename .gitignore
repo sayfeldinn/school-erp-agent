@@ -9,3 +9,5 @@ plan.md
 scripts/calibration_runs/
 *.log
 flutter/
+/runtime/security.db
+/runtime/security.db-*

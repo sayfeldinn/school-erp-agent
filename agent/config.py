@@ -90,9 +90,9 @@ def create_llm() -> LLMClient:
 
 
 def describe() -> str:
-    """One-line resolved config (key masked) - for banners and --check."""
+    """One-line resolved config with key presence only - for banners and --check."""
     cfg = resolve_config()
-    key = f" key={cfg['api_key'][:7]}..." if cfg["api_key"] else " (no key)"
+    key = " key=PRESENT" if cfg["provider"] == "openai" and cfg["api_key"] else ""
     return f"llm: {cfg['provider']} model={cfg['model']} base={cfg['base_url']}{key}"
 
 

@@ -1,104 +1,180 @@
-# Architecture (FROZEN v2 — aligns with plan.md §5 + §9)
+# Architecture — current implementation
 
-This is the reference the whole team uses. The agent is graded; Flutter/API/data are tools.
+## 1. End-to-end data flow
 
-## 1. Data flow
-
-```
-User (Chat UI / CLI / curl)
+```text
+Public client (Flutter / curl)
+        |
+        |  POST /auth/login {email, password}
+        v
+FastAPI Agent Server :8000                          api/agent_server.py
+        |
+        |  opaque access token
+        v
+Public client
+        |
+        |  POST /chat + Authorization: Bearer <token>
+        v
+Authentication/session resolution                  security/auth_*.py
+        |  server-derived email + role + tenant
+        v
+AgentLoop offers only role-allowed tools            agent/core.py + agent/tools.py
         |
         v
-FastAPI Agent Server  (port 8000, sessions, CORS)   — api/agent_server.py
-        |  X-Agent-School / Role / User  (bound to session)
-        v
-LLM — Ollama qwen3:8b native tools (think:false, temp 0, 8192 ctx)
-      or any OpenAI-compatible backend via .env      — agent/llm_client.py + agent/config.py
-        |  decides tool + params
-        v
-Validation Layer (app-level, never the model)        — agent/executor.py + agent/tools.py
-  1. Tool exists?  2. Role allowlist  3. JSON Schema bounds  4. Normalize  5. Identity
-        |  HTTP GET + identity headers
-        v
-Mock API — JSON seed (dumb data layer)               — api/mock_api.py (port 8001)
-        |  tool result
-        v
-UNTRUSTED data block  [BEGIN TOOL RESULT ... END]    — agent/executor.py + agent/core.py
+LLM proposes a tool name and arguments              agent/llm_client.py
         |
         v
-LLM analyzes -> final answer (or next tool call)
+Deterministic executor checks                       agent/executor.py
+  1. registry  2. role allowlist  3. strict schema
+  4. fixed identity/resource context  5. fixed endpoint mapping
+        |
+        |  HTTP GET + internal server-derived X-Agent-* context
+        v
+Mock ERP :8001 re-checks tenant/resource/self scope api/mock_api.py
+        |
+        |  authorized result or sanitized failure
+        v
+UNTRUSTED tool-result block -> LLM -> final answer
 ```
 
-Two boundaries, intentionally separated:
-- **AI decides** what it *wants*.
-- **Application enforces** what is *allowed*. The Mock API stays a dumb data layer; the only enforcement gate is the executor + server (see security-model.md).
+**The LLM proposes. Deterministic security controls decide. The API enforces.**
 
-## 2. Sequence — multi-tool question
+This guarantees the enforced tool and data boundary, not the truth of every
+word in final model-generated text. There is no general deterministic grounding
+or response-redaction post-check.
 
+The two HTTP boundaries have different trust models:
+
+- Public clients authenticate to port 8000 with a Bearer token. Public
+  `X-Agent-User`, `X-Agent-Role`, and `X-Agent-School` values neither
+  authenticate nor override that identity.
+- The executor sends those `X-Agent-*` names only as internal context to the
+  loopback Mock ERP. Port 8001 re-checks scope but does not implement signed or
+  production service-to-service authentication.
+
+## 2. Authenticated multi-tool sequence
+
+```text
+Client               Agent Server             LLM              Executor             Mock ERP
+  | POST /auth/login      |                     |                  |                     |
+  |---------------------->| verify password     |                  |                     |
+  |<-- Bearer token ------| create auth session |                  |                     |
+  |                       |                     |                  |                     |
+  | POST /chat            |                     |                  |                     |
+  | Authorization: Bearer |                     |                  |                     |
+  |---------------------->| resolve identity    |                  |                     |
+  |                       |-- AgentLoop.run ---->| tools for role   |                     |
+  |                       |                     |-- get_student --->| registry/role/schema|
+  |                       |                     |                  |-- GET /students?name|
+  |                       |                     |                  |  + internal identity|
+  |                       |                     |                  |-------------------->|
+  |                       |                     |                  |<-- scoped row -------|
+  |                       |                     |<-- untrusted data-|                     |
+  |                       |                     |-- get_attendance->| validate + fixed map|
+  |                       |                     |                  |-- GET /attendance -->|
+  |                       |                     |<-- untrusted data-|<-- scoped record ----|
+  |                       |<-- final answer ----|                  |                     |
+  |<-- answer + trace ----|                     |                  |                     |
 ```
-User                      Agent Server                  LLM                     Executor                Mock API
- |  POST /chat {message}        |                         |                         |                      |
- |----------------------------->|  AgentLoop.run()        |                         |                      |
- |                             |------------------------>|  chat(messages, tools)  |                      |
- |                             |                         |--tool_call: get_student-->|                    |
- |                             |                         |  {name:"Ahmed"}          |--GET /students?name |
- |                             |                         |                         |--------------------->|
- |                             |                         |                         |<--{id:1, grade:5}----|
- |                             |  tool result as         |<-- [UNTRUSTED DATA] -----|                      |
- |                             |  role:"tool" block      |                         |                      |
- |                             |                         |--tool_call: get_attendance {studentId:1}       |
- |                             |                         |                         |--GET /attendance?... |
- |                             |                         |                         |<--{status:present}---|
- |                             |                         |<-- [UNTRUSTED DATA] -----|                      |
- |                             |                         |  final answer: "Ahmed is present today."        |
- |                             |<------------------------|                         |                      |
- |<-- {answer, steps, status}--|                         |                         |                      |
-```
 
-Guards (all in `agent/core.py`, never the model): max **5 iterations**, **repeated identical call abort**, unknown tool → hard reject, empty → honest "no records", per-call timeouts, `LLMError` → typed user message.
+For a student, the same sequence offers only `get_my_profile` and
+`get_my_attendance`. Those parameterless calls map to `/students/me` and
+`/attendance/me`, where the Mock ERP resolves the roster id from the internal
+student identity and re-checks the school.
 
-Session memory: `POST /chat {session_id}` — server keeps last **8 turns** per session (in-memory, max 100 sessions, oldest evicted). Identity is bound on session creation; switching `X-Agent-School/Role/User` mid-session → `403 identity_mismatch`.
+## 3. Deterministic enforcement and loop guards
 
-## 3. Modules
+`AgentLoop._offered_tools()` filters the registry before the LLM request. The
+executor still re-checks the proposed tool, so a compromised or malformed model
+cannot bypass the allowlist by naming a hidden tool.
 
-| Path | Owns |
+Validation is performed on the raw arguments before normalization. As a result,
+numeric strings do not satisfy integer schemas. Unexpected fields are rejected,
+and `get_student` and `get_attendance` enforce their exclusive selectors with
+`oneOf`. After successful validation, supported relative date strings are
+translated and the tool maps to a hard-coded path and query-key set.
+
+Loop guards include a five-iteration maximum, abort after the same tool and
+arguments are executed twice, a 5-second default ERP HTTP timeout, and typed LLM
+provider failures. Empty and failed tool results return to the LLM as marked
+untrusted data. Unknown or role-restricted tools and invalid schemas never reach
+ERP HTTP.
+
+Unless an explicit `system_prompt` override is supplied, prompt selection
+follows the authenticated role: `student` uses `agent/prompts/student.json`,
+`teacher` uses `agent/prompts/teacher.json`, and admin or other roles use
+`agent/prompts/system.json`. An explicit override still wins. Prompt text guides
+model behavior but is not part of the authorization decision; the deterministic
+registry, executor, and ERP boundary remain authoritative. See
+`docs/security-model.md` for the enforced contract and known limitations.
+
+## 4. Modules
+
+| Path | Responsibility |
 |---|---|
-| `agent/tools.py` | 4 strict tool schemas (OpenAI-style) + `ALLOWED_TOOLS_BY_ROLE` + `allowed_tools_for()` |
-| `agent/executor.py` | `ToolExecutor`: validate (exist/allowlist/schema) → normalize → HTTP GET with `X-Agent-*` → `ToolResult` |
-| `agent/core.py` | `AgentLoop`: decide→validate→execute→feed back→answer loop, `max_iterations=5`, `load_system_prompt()` |
-| `agent/llm_client.py` | `OllamaClient` (native `/api/chat`) + `OpenAICompatClient` (Groq/LM Studio), schema shim, `Retry-After` on 429/5xx |
-| `agent/config.py` | `load_env()` + `resolve_config()` + `create_llm()` + `describe()` — one `.env` switches backends |
-| `agent/prompts/system.json` | System prompt as **data** (v1) — edit without touching code; P4 iterates here |
-| `api/mock_api.py` | Contract-faithful mock of `docs/api-contract.md` (port 8001), `TRUSTED_SCHOOL_BY_USER` + `_school_scope()` on all endpoints |
-| `api/agent_server.py` | `POST /chat` + `GET /health`, CORS, sessions, error shapes — contract `docs/agent-server-contract.md` |
-| `data/seed.json` | Frozen v1 (26 students, 2 schools, grades 5+6, 15 days, poisoned row id 23, edge cases) |
-| `scripts/chat_cli.py` | Interactive demo with per-step trace + `--check` health gate |
-| `scripts/calibrate.py` | Bench + native vs JSON accuracy harness |
-| `scripts/smoke_eval.py` | **Phase 6** local smoke eval (8 cases × 2 surfaces) — template for P4's full dataset |
-| `chat_ui/` | Flutter chat UI (`lib/main.dart` talks to `:8000` with identity headers) |
+| `security/auth_store.py` | SQLite tenants and users; password-hash persistence |
+| `security/auth_passwords.py` | Argon2id password hashing and verification |
+| `security/auth_sessions.py` | Opaque Bearer session issuance, hashing, expiry, and revocation |
+| `security/auth_login.py` | Credential verification and session creation |
+| `security/auth_context.py` | Bearer parsing and server-side identity resolution |
+| `security/auth_registration.py` | Demo enrollment-code and roster-bound registration |
+| `security/auth_routes.py` | `/auth/register`, `/auth/login`, `/auth/me`, `/auth/logout` |
+| `agent/tools.py` | Six strict schemas plus the role allowlist |
+| `agent/executor.py` | Registry/role/schema checks, normalization, fixed HTTP mapping, internal identity context, sanitized results |
+| `agent/core.py` | Role-filtered tool offering and decide/execute/repeat loop |
+| `agent/prompts/student.json` | Student self-service and confidentiality guidance |
+| `agent/prompts/teacher.json` | Teacher role-aligned model guidance |
+| `agent/prompts/system.json` | Generic admin/other model guidance |
+| `agent/llm_client.py` | Ollama and OpenAI-compatible provider adapters |
+| `agent/config.py` | Provider configuration; diagnostic API-key presence only |
+| `api/agent_server.py` | Public authenticated agent/auth API and in-memory chat history |
+| `api/mock_api.py` | Loopback demo ERP data plus tenant/resource/self-scope re-checks |
+| `chat_ui/lib/main.dart` | Registration, login, Bearer-authenticated chat, and logout UI |
 
-## 4. The 4 tools (only 4 — by design)
+## 5. Role-specific tool surface
 
-| Tool | Params | Use |
-|---|---|---|
-| `get_students` | `grade` 1–12?, `classroom`?, `name`? | lists, counts, searches |
-| `get_student` | `id` **or** `name` (exactly one) | one specific student |
-| `get_teachers` | `grade`?, `classroom`? | teacher questions |
-| `get_attendance` | `studentId` **or** `grade` + `date`? | single-student **or** whole-grade status (ONE call) |
+| Tool | Parameters | Student | Teacher | Admin |
+|---|---|:---:|:---:|:---:|
+| `get_my_profile` | none | yes | no | no |
+| `get_my_attendance` | none | yes | no | no |
+| `get_students` | optional `grade`, `classroom`, `name` | no | yes | yes |
+| `get_student` | exactly one of `id`, `name` | no | yes | yes |
+| `get_attendance` | exactly one of `studentId`, `grade`; optional `date` | no | yes | yes |
+| `get_teachers` | optional `grade`, `classroom` | no | no | yes |
 
-All schemas: `additionalProperties: false`, numeric bounds, `oneOf` for `get_student`. Descriptions guide tool selection; the app enforces it.
+This table is the executor authorization surface. The local Mock ERP separately
+recognizes a static roster-teacher trusted-user map; an admin provisioned with an
+unmapped email authenticates and receives these tools but gets a sanitized `403`
+from school-scoped Mock calls.
 
-## 5. LLM backends (one `.env` switches all)
+There are no delete, salary, credential, arbitrary-URL, all-school, or role
+administration tools in the registry.
 
-| Provider | `.env` | Default model |
-|---|---|---|
-| `ollama` (default) | `LLM_PROVIDER=ollama` | `qwen3:8b` |
-| `groq` / `lm studio` / `jan` | `LLM_PROVIDER=openai` + `LLM_BASE_URL` + `LLM_API_KEY` | `llama-3.3-70b-versatile` |
+## 6. State and persistence
 
-Switch requires no code change — `agent/config.py` + `agent/llm_client.py` handle tool-schema shimming and 429/5xx retries.
+Authentication data is persisted in the SQLite file configured by
+`AUTH_DB_PATH` (default `runtime/security.db`). Passwords and raw session tokens
+are not stored there; password/token hashes are persisted alongside tenant,
+user, issued-authority, timestamp, expiry, and revocation metadata.
 
-## 6. Failure modes
+The Bearer authentication session has a 15-minute idle and 8-hour absolute
+timeout. `/auth/logout` revokes it. Separately, `/chat` accepts an optional
+`session_id` for in-memory conversation history. The server keeps at most 100
+chat sessions, stores up to eight user/assistant turn pairs in each, and binds
+each id to the Bearer-resolved identity. `AgentLoop` consumes only the last
+eight stored messages (four complete pairs) on a run. Chat history does not
+survive process restart.
 
-- **No provider reachable** → `conftest.py` skips every `integration` test; `chat_cli --check` and `POST /chat` return `status:error` with a typed `kind` (`rate_limited`/`auth`/`not_found`/`unreachable`).
-- **Tool validation fails** → `ToolResult(status=kind, http_status=400)` fed back as untrusted data; loop continues.
-- **HTTP 403/4xx** → `forbidden`/`error` result block; LLM is told "outside your access scope".
-- **Loop spins** → `repeated_call` abort after the same tool+params twice.
+## 7. Failure modes
+
+- Missing or invalid Bearer authentication on `/chat` returns `401` before the
+  LLM or chat session store is used.
+- Reusing a chat `session_id` with a different authenticated identity returns
+  `403 identity_mismatch`.
+- Unknown, disallowed, or schema-invalid tool calls return a fail-closed tool
+  result without ERP HTTP.
+- A Mock ERP `403` becomes a sanitized scope denial. Other downstream error
+  bodies are replaced with stable server-owned text before the LLM sees them.
+- A repeated call or iteration cap ends with a generic retry/rephrase response.
+- LLM provider failures become typed agent errors; unexpected agent failures
+  become `500 internal_error` without exception details.

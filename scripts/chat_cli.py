@@ -55,7 +55,7 @@ def run_check() -> int:
     """Verify the configured provider: config -> direct chat -> full tool loop."""
     cfg = resolve_config()
     llm = create_llm()
-    key = f" key={cfg['api_key'][:7]}..." if cfg["api_key"] else ""
+    key = " key=PRESENT" if cfg["provider"] == "openai" and cfg["api_key"] else ""
     print(f"provider : {cfg['provider']}")
     print(f"model    : {cfg['model']}")
     print(f"base_url : {cfg['base_url']}")

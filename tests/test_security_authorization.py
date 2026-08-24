@@ -13,7 +13,6 @@ def test_teacher_retains_intended_tool_access():
     assert allowed_tools_for("teacher") == [
         "get_students",
         "get_student",
-        "get_teachers",
         "get_attendance",
     ]
 
@@ -22,8 +21,8 @@ def test_admin_retains_intended_tool_access():
     assert allowed_tools_for("admin") == [
         "get_students",
         "get_student",
-        "get_teachers",
         "get_attendance",
+        "get_teachers",
     ]
 
 

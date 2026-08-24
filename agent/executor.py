@@ -28,6 +28,8 @@ _ENDPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "get_student_by_name": ("/students", ("name",)),
     "get_teachers": ("/teachers", ("grade", "classroom")),
     "get_attendance": ("/attendance", ("studentId", "grade", "date")),
+    "get_my_profile": ("/students/me", ()),
+    "get_my_attendance": ("/attendance/me", ()),
 }
 
 MAX_TOOL_RESULT_CHARS = 2000
@@ -157,7 +159,11 @@ class ToolExecutor:
         if resp.status_code == 403:
             return ToolResult(status="forbidden", message="That data is outside your access scope.", http_status=403)
         if resp.status_code >= 400:
-            return ToolResult(status="error", message=resp.text[:200], http_status=resp.status_code)
+            return ToolResult(
+                status="error",
+                message="The school data service could not complete that request.",
+                http_status=resp.status_code,
+            )
 
         payload = resp.json()
         empty = payload.get("students") == [] or payload.get("teachers") == [] or payload.get("records") == []

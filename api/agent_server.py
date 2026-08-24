@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 from agent.config import create_llm, load_env
 from agent.core import AgentLoop
 from agent.llm_client import LLMError
+from security.auth_context import resolve_authenticated_identity
+from security.auth_routes import create_auth_router
 
 DEFAULT_MOCK_URL = "http://127.0.0.1:8001"
 DEFAULT_ROLE = "teacher"
@@ -109,9 +111,14 @@ def _error(code: str, detail: str) -> dict[str, Any]:
 
 @app.exception_handler(RequestValidationError)
 async def _validation_handler(request: Request, exc: RequestValidationError):
+    detail = (
+        "registration_failed"
+        if request.url.path == "/auth/register"
+        else "request body is invalid: message must be a non-empty string"
+    )
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
-        content=_error("invalid_params", "request body is invalid: message must be a non-empty string"),
+        content=_error("invalid_params", detail),
     )
 
 
@@ -188,6 +195,7 @@ def chat(
     x_agent_school: str | None = Header(default=None, alias="X-Agent-School"),
     x_agent_role: str | None = Header(default=None, alias="X-Agent-Role"),
     x_agent_user: str | None = Header(default=None, alias="X-Agent-User"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     message = body.message.strip()
     if not message:
@@ -195,7 +203,15 @@ def chat(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_params", "detail": "message must be a non-empty string"},
         )
-    identity = _identity(x_agent_school, x_agent_role, x_agent_user)
+    identity = resolve_authenticated_identity(authorization, AUTH_DB_PATH)
+    if identity is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "authentication_required",
+                "detail": "authentication is required",
+            },
+        )
     sid = body.session_id or uuid.uuid4().hex
     sid, history = store.get(sid, identity)
     try:
@@ -210,3 +226,5 @@ def chat(
 
 
 load_env()
+AUTH_DB_PATH = os.getenv("AUTH_DB_PATH", "runtime/security.db")
+app.include_router(create_auth_router(AUTH_DB_PATH))
