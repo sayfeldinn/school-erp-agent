@@ -114,8 +114,8 @@ TOOLS: list[dict[str, Any]] = [
                 "status, history, or counts. For ONE student pass studentId (look the "
                 "student up first with get_student to learn their id). For a "
                 "WHOLE grade pass grade (e.g. grade=5) to get every student's "
-                "status and attendance history in one call. Optional ISO date (YYYY-MM-DD); omit it "
-                "to get all dates/history - do not invent dates."
+                "status in one call. Optional ISO date (YYYY-MM-DD); omit it "
+                "for today - do not invent dates (e.g. never use 2023-10-10)."
             ),
         "parameters": {
             "type": "object",
