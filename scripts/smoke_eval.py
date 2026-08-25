@@ -133,8 +133,23 @@ def _score(case, answer, tool_calls, status):
             problems.append(f"rejection must not call tools, got {tools}")
         if not answer or len(answer.strip()) < 5:
             problems.append("rejection answer is empty")
-        # generic refusal signal
-        if not any(w in answer_low for w in ["cannot", "can't", "not able", "unable", "not allowed", "refuse", "sorry"]):
+        # generic refusal signal (broadened for P3 student/teacher phrasing)
+        if not any(
+            w in answer_low
+            for w in [
+                "cannot",
+                "can't",
+                "not able",
+                "unable",
+                "not allowed",
+                "refuse",
+                "sorry",
+                "does not support",
+                "not support",
+                "only access",
+                "does not",
+            ]
+        ):
             problems.append(f"rejection answer doesn't sound like a refusal: {answer[:120]!r}")
     else:
         exp = case.get("expect_tool")
@@ -194,18 +209,56 @@ def run_server_surface(mock_url):
 
     # point the agent server at our in-process mock
     import os
+    import tempfile
+
+    from security.auth_login import LoginService
+    from security.auth_registration import register_account
+    from security.auth_store import SecurityStore
 
     os.environ["MOCK_API_URL"] = mock_url
+    # Bearer auth setup (P3) — disposable DB for this run
+    tmpdir = tempfile.mkdtemp()
+    tmp_db = str(Path(tmpdir) / "smoke_security.db")
+    os.environ["AUTH_DB_PATH"] = tmp_db
+    import api.agent_server as agent_server_module
+
+    agent_server_module.AUTH_DB_PATH = tmp_db
+    store = SecurityStore(tmp_db)
+    store.initialize()
+    from security.auth_sessions import SessionService
+
+    sess_svc = SessionService(tmp_db)
+    sess_svc.initialize()
+    try:
+        store.create_tenant("school-a", "Al Noor School")
+    except ValueError:
+        pass
+    smoke_password = "SmokeTeacherPass123!"
+    email = None
+    for candidate in ["Ms. Nour Hassan", "Mr. Samy Fawzy"]:
+        try:
+            email = register_account(
+                tmp_db,
+                full_name=candidate,
+                password=smoke_password,
+                confirm_password=smoke_password,
+                school_code="ANS-A-T",
+            )
+            break
+        except Exception:
+            continue
+    if email is None:
+        raise RuntimeError("Failed to register smoke teacher account")
+    token = LoginService(tmp_db).authenticate(email, smoke_password)
+    if token is None:
+        raise RuntimeError("Failed to login smoke teacher account")
+
     # inject the real llm from the env so POST /chat uses the same provider
     load_env()
     agent_app.state.agent_llm = create_llm()
 
     client = TestClient(agent_app)
-    headers = {
-        "X-Agent-School": TRUSTED_SCHOOL,
-        "X-Agent-Role": ROLE,
-        "X-Agent-User": TRUSTED_USER,
-    }
+    headers = {"Authorization": f"Bearer {token}"}
     print("\n=== Surface 2: POST /chat server ===")
     results = []
     for case in CASES:
