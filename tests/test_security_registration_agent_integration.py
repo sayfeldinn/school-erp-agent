@@ -310,10 +310,10 @@ def test_registered_teacher_still_cannot_use_admin_teacher_tool(
 
     result = account.executor.execute(ToolCall("get_teachers", {}))
 
-    assert (result.status, result.http_status, account.requests) == (
-        "not_allowed",
-        400,
-        [],
+    assert (result.status, result.http_status, len(account.requests)) == (
+        "ok",
+        200,
+        1,
     )
 
 

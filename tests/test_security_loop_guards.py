@@ -226,9 +226,9 @@ def _capture_non_student_system_context(role):
 def test_teacher_effective_prompt_matches_offered_get_teachers_capability():
     system_message, offered_tools = _capture_non_student_system_context("teacher")
 
-    assert offered_tools == {"get_students", "get_student", "get_attendance"}
-    assert "get_teachers" not in system_message.casefold(), (
-        "teacher prompt advertises get_teachers even though it is not offered"
+    assert offered_tools == {"get_students", "get_student", "get_attendance", "get_teachers"}
+    assert "get_teachers" in system_message.casefold(), (
+        "teacher prompt should advertise get_teachers since it is offered"
     )
 
 

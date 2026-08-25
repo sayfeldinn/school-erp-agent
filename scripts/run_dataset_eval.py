@@ -79,15 +79,62 @@ def evaluate_dataset() -> int:
     print(f"  P4 Evaluation Benchmark — {len(cases)} Cases")
     print(f"==================================================\n")
 
+    # --- Bearer auth setup (P3 auth) ---
+    # Create a disposable auth DB for this eval run so we don't clobber runtime/security.db
+    import tempfile
+
+    from security.auth_login import LoginService
+    from security.auth_registration import register_account
+    from security.auth_store import SecurityStore
+
+    tmpdir = tempfile.mkdtemp()
+    tmp_db = str(Path(tmpdir) / "eval_security.db")
+
+    # Use tmp DB via env and direct patch so agent_server resolves it
+    os.environ["AUTH_DB_PATH"] = tmp_db
+    import api.agent_server as agent_server_module
+
+    agent_server_module.AUTH_DB_PATH = tmp_db
+    store = SecurityStore(tmp_db)
+    store.initialize()
+    from security.auth_sessions import SessionService
+
+    sess_svc = SessionService(tmp_db)
+    sess_svc.initialize()
+    # create tenant for school-a (store still open)
+    try:
+        store.create_tenant("school-a", "Al Noor School")
+    except ValueError:
+        pass
+    # register a teacher from roster (Ms. Nour Hassan) with a deterministic password
+    eval_password = "EvalTeacherPass123!"
+    email = None
+    for candidate in ["Ms. Nour Hassan", "Mr. Samy Fawzy"]:
+        try:
+            email = register_account(
+                tmp_db,
+                full_name=candidate,
+                password=eval_password,
+                confirm_password=eval_password,
+                school_code="ANS-A-T",
+            )
+            break
+        except Exception:
+            continue
+    if email is None:
+        print("Failed to register eval teacher account")
+        return 1
+    # login to get token
+    token = LoginService(tmp_db).authenticate(email, eval_password)
+    if token is None:
+        print("Failed to login eval teacher account")
+        return 1
+
     client = TestClient(agent_app)
     passed = 0
     failed = 0
 
-    headers = {
-        "X-Agent-School": "school-a",
-        "X-Agent-Role": "teacher",
-        "X-Agent-User": "teacher.ahmed@school-a.edu",
-    }
+    headers = {"Authorization": f"Bearer {token}"}
 
     for case in cases:
         case_id = case["id"]

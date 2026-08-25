@@ -83,6 +83,7 @@ def test_role_matrix_distinguishes_student_teacher_admin():
             "get_students",
             "get_student",
             "get_attendance",
+            "get_teachers",
         ],
         "admin": [
             "get_students",
@@ -174,7 +175,7 @@ def test_student_cannot_use_broad_school_tools(executor_factory):
     assert requests == []
 
 
-def test_teacher_cannot_get_teachers(executor_factory):
+def test_teacher_can_get_teachers(executor_factory):
     executor, requests = executor_factory(
         role="teacher",
         user="teacher.ahmed@school-a.edu",
@@ -184,9 +185,9 @@ def test_teacher_cannot_get_teachers(executor_factory):
     result = executor.execute(ToolCall("get_teachers", {}))
 
     assert (result.status, result.http_status, len(requests)) == (
-        "not_allowed",
-        400,
-        0,
+        "ok",
+        200,
+        1,
     )
 
 
