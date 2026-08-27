@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _baseUrl = 'http://127.0.0.1:8000';
+const _kSessionIdPrefsKey = 'agent_session_id';
 
 void main() {
   runApp(const SchoolERPAgentApp());
@@ -442,6 +444,51 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Map<String, String>> _messages = [];
   bool _isLoading = false;
   bool _isLoggingOut = false;
+  String? _sessionId;
+  bool _isNewChatLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSessionId();
+  }
+
+  Future<void> _loadSessionId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_kSessionIdPrefsKey);
+      if (mounted && saved != null && saved.isNotEmpty) {
+        setState(() {
+          _sessionId = saved;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _persistSessionId(String? sessionId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (sessionId == null) {
+        await prefs.remove(_kSessionIdPrefsKey);
+      } else {
+        await prefs.setString(_kSessionIdPrefsKey, sessionId);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _startNewChat() async {
+    if (_isNewChatLoading || _isLoading) return;
+    setState(() {
+      _isNewChatLoading = true;
+    });
+    _sessionId = null;
+    await _persistSessionId(null);
+    if (!mounted) return;
+    setState(() {
+      _messages.clear();
+      _isNewChatLoading = false;
+    });
+  }
 
   Future<void> sendMessageToAgent(String query) async {
     setState(() {
@@ -456,11 +503,16 @@ class _ChatScreenState extends State<ChatScreen> {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${widget.accessToken}',
         },
-        body: jsonEncode({'message': query}),
+        body: jsonEncode({
+          'message': query,
+          if (_sessionId != null) 'session_id': _sessionId,
+        }),
       );
 
       if (response.statusCode == 401) {
         authenticationLost = true;
+        _sessionId = null;
+        await _persistSessionId(null);
         if (mounted) {
           widget.onAuthenticationRequired();
         }
@@ -471,6 +523,11 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
 
       if (response.statusCode == 200) {
+        final sessionId = data['session_id'];
+        if (sessionId is String && sessionId.isNotEmpty) {
+          _sessionId = sessionId;
+          await _persistSessionId(sessionId);
+        }
         final text = data['answer'] ?? 'No answer received.';
         setState(() {
           _messages.insert(0, {"sender": "Agent", "text": text});
@@ -518,6 +575,8 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       // Local logout still completes when the server cannot be reached.
     } finally {
+      _sessionId = null;
+      await _persistSessionId(null);
       if (mounted) {
         widget.onAuthenticationRequired();
       }
@@ -550,6 +609,17 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: Colors.blueAccent,
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            tooltip: 'New chat',
+            onPressed: (_isLoading || _isLoggingOut || _isNewChatLoading) ? null : _startNewChat,
+            icon: _isNewChatLoading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.add_comment_outlined),
+          ),
           IconButton(
             tooltip: 'Logout',
             onPressed: _isLoggingOut ? null : _logout,
