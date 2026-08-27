@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 const _email = 'teacher.ahmed@school-a.edu';
 const _password = 'temporary widget test password';
@@ -14,6 +15,7 @@ const _registrationName = 'Sara Mohamed';
 const _schoolCode = 'ANS-A-S';
 
 Future<void> _pumpApp(WidgetTester tester, http.Client client) async {
+  SharedPreferences.setMockInitialValues({});
   await tester.pumpWidget(SchoolERPAgentApp(client: client));
   await tester.pumpAndSettle();
 }
@@ -393,5 +395,83 @@ void main() {
     expect(find.text('Sign in'), findsOneWidget);
     expect(find.byType(TextField), findsNWidgets(2));
     expect(find.byIcon(Icons.send), findsNothing);
+  });
+
+  testWidgets('chat persists session_id across messages', (tester) async {
+    final chatBodies = <Map<String, dynamic>>[];
+    final client = MockClient((request) async {
+      if (request.url.path == '/auth/login') {
+        return _loginSuccess();
+      }
+      if (request.url.path == '/chat') {
+        chatBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+        return http.Response(
+          jsonEncode({
+            'status': 'answered',
+            'answer': 'There are 14 students in Grade 5.',
+            'session_id': 'test-session-123',
+            'iterations': 2,
+          }),
+          200,
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+      return http.Response('{}', 404);
+    });
+
+    await _pumpApp(tester, client);
+    await _signIn(tester);
+    await tester.enterText(find.byType(TextField), 'How many Grade 5?');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+    expect(chatBodies, hasLength(1));
+    expect(chatBodies[0].containsKey('session_id'), isFalse);
+
+    await tester.enterText(find.byType(TextField), 'Who was absent?');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+    expect(chatBodies, hasLength(2));
+    expect(chatBodies[1]['session_id'], 'test-session-123');
+  });
+
+  testWidgets('new chat clears session and messages', (tester) async {
+    var chatCount = 0;
+    final client = MockClient((request) async {
+      if (request.url.path == '/auth/login') {
+        return _loginSuccess();
+      }
+      if (request.url.path == '/chat') {
+        chatCount++;
+        return http.Response(
+          jsonEncode({
+            'status': 'answered',
+            'answer': 'Answer $chatCount',
+            'session_id': 'session-$chatCount',
+            'iterations': 1,
+          }),
+          200,
+          headers: {'Content-Type': 'application/json'},
+        );
+      }
+      return http.Response('{}', 404);
+    });
+
+    await _pumpApp(tester, client);
+    await _signIn(tester);
+    await tester.enterText(find.byType(TextField), 'First question');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+    expect(find.text('Answer 1'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('New chat'));
+    await tester.pumpAndSettle();
+    expect(find.text('Answer 1'), findsNothing);
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'Second question');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+    expect(find.text('Answer 2'), findsOneWidget);
+    expect(find.text('Answer 1'), findsNothing);
   });
 }
